@@ -387,7 +387,7 @@ pub(crate) enum Kind {
     Eof,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Line(usize);
 
 impl Default for Line {

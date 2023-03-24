@@ -13,7 +13,8 @@ pub enum ChunkError {
 pub(crate) struct Chunk {
     pub(crate) constants: Vec<Value>,
     pub(crate) instructions: Vec<u8>,
-    pub(crate) lines: Vec<usize>,
+    pub(crate) lines: Vec<Line>,
+    pub(crate) line_run_lengths: Vec<usize>,
 }
 
 impl Chunk {
@@ -25,7 +26,17 @@ impl Chunk {
     /// Write an arbitrarily byte into the chunk.
     pub(crate) fn write_byte(&mut self, byte: u8, line: Line) {
         self.instructions.push(byte);
-        self.lines.push(*line);
+        match self.lines.last() {
+            Some(n) if *n == line => {
+                if let Some(run_length) = self.line_run_lengths.last_mut() {
+                    *run_length += 1
+                }
+            }
+            _ => {
+                self.lines.push(line);
+                self.line_run_lengths.push(1);
+            }
+        }
     }
 
     /// Write a constant along with an instruction to load it into the chunk.
@@ -37,6 +48,17 @@ impl Chunk {
         self.constants.push(value);
         self.write_byte(constant_id as u8, line);
         Ok(())
+    }
+
+    pub(crate) fn get_line(&self, offset: usize) -> Line {
+        let mut total_run_length = 0;
+        for (i, run_length) in self.line_run_lengths.iter().enumerate() {
+            total_run_length += run_length;
+            if total_run_length > offset {
+                return *self.lines.get(i).unwrap();
+            }
+        }
+        Line::default()
     }
 }
 
@@ -53,14 +75,14 @@ pub(crate) fn disassemble_chunk(chunk: &Chunk, name: &str) {
 /// Display an instruction in human readable format.
 #[cfg(debug_assertions)]
 pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
-    let line_current = chunk.lines[offset];
-    let line_previous = chunk.lines[offset.saturating_sub(1)];
+    let line_current = chunk.get_line(offset);
+    let line_previous = chunk.get_line(offset.saturating_sub(1));
     // Annotation for seperating instructions from different lines.
     print!("{offset:04} ");
     if offset > 0 && line_current == line_previous {
         print!("   | ");
     } else {
-        print!("{line_current:4} ");
+        print!("{:4} ", *line_current);
     }
     let instruction = match Opcode::try_from(chunk.instructions[offset]) {
         Ok(inst) => inst,
