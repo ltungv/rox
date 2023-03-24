@@ -1,0 +1,27 @@
+//! An interpreter for the Lox programming language.
+
+#![deny(rust_2018_idioms, rust_2021_compatibility)]
+#![warn(missing_docs)]
+
+mod chunk;
+mod compile;
+mod object;
+mod opcode;
+mod scan;
+mod stack;
+mod value;
+mod vm;
+
+pub use compile::CompileError;
+pub use vm::{RuntimeError, VirtualMachine};
+
+/// A enumeration of all potential errors that might occur when working with the virtual machine.
+#[derive(Debug, thiserror::Error)]
+pub enum InterpretError {
+    /// Error with compiling the source code.
+    #[error(transparent)]
+    Compile(#[from] CompileError),
+    /// Error with running the bytecode.
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
+}
