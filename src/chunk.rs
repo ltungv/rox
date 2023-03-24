@@ -68,21 +68,24 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
     };
     // Print each individual instruction.
     match instruction {
-        Opcode::Constant => disassemble_constant(chunk, offset, "CONSTANT"),
+        Opcode::Const => disassemble_constant(chunk, offset, "OP_CONST"),
         Opcode::Nil => disassemble_simple(offset, "OP_NIL"),
         Opcode::True => disassemble_simple(offset, "OP_TRUE"),
         Opcode::False => disassemble_simple(offset, "OP_FALSE"),
         Opcode::Print => disassemble_simple(offset, "PRINT"),
-        Opcode::Equal => disassemble_simple(offset, "OP_EQUAL"),
-        Opcode::Greater => disassemble_simple(offset, "OP_GREATER"),
-        Opcode::Less => disassemble_simple(offset, "OP_LESS"),
+        Opcode::NE => disassemble_simple(offset, "OP_NE"),
+        Opcode::EQ => disassemble_simple(offset, "OP_EQ"),
+        Opcode::GT => disassemble_simple(offset, "OP_GT"),
+        Opcode::GE => disassemble_simple(offset, "OP_GE"),
+        Opcode::LT => disassemble_simple(offset, "OP_LT"),
+        Opcode::LE => disassemble_simple(offset, "OP_LE"),
         Opcode::Add => disassemble_simple(offset, "OP_ADD"),
-        Opcode::Subtract => disassemble_simple(offset, "OP_SUBTRACT"),
-        Opcode::Multiply => disassemble_simple(offset, "OP_MULTIPLY"),
-        Opcode::Divide => disassemble_simple(offset, "OP_DIVIDE"),
+        Opcode::Sub => disassemble_simple(offset, "OP_SUB"),
+        Opcode::Mul => disassemble_simple(offset, "OP_MUL"),
+        Opcode::Div => disassemble_simple(offset, "OP_DIV"),
         Opcode::Not => disassemble_simple(offset, "OP_NOT"),
-        Opcode::Negate => disassemble_simple(offset, "OP_NEGATE"),
-        Opcode::Return => disassemble_simple(offset, "RETURN"),
+        Opcode::Neg => disassemble_simple(offset, "OP_NEG"),
+        Opcode::Ret => disassemble_simple(offset, "OP_RET"),
         _ => unreachable!(),
     }
 }

@@ -110,67 +110,30 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
                 disassemble_instruction(self.chunk, self.ip);
             }
             match Opcode::try_from(self.read_byte())? {
-                Opcode::Constant => {
+                Opcode::Const => {
                     let constant = self.read_constant().clone();
                     self.vm.stack.push(constant)?;
                 }
-                Opcode::Nil => {
-                    self.vm.stack.push(Value::Nil)?;
-                }
-                Opcode::True => {
-                    self.vm.stack.push(Value::Bool(true))?;
-                }
-                Opcode::False => {
-                    self.vm.stack.push(Value::Bool(false))?;
-                }
+                Opcode::Nil => self.vm.stack.push(Value::Nil)?,
+                Opcode::True => self.vm.stack.push(Value::Bool(true))?,
+                Opcode::False => self.vm.stack.push(Value::Bool(false))?,
                 Opcode::Print => {
                     let v = self.vm.stack.pop()?;
                     self.vm.print(v);
                 }
-                Opcode::Equal => {
-                    let right = self.vm.stack.pop()?;
-                    let left = self.vm.stack.top_mut()?;
-                    *left = Value::Bool((*left).eq(&right));
-                }
-                Opcode::Greater => {
-                    let right = self.vm.stack.pop()?;
-                    let left = self.vm.stack.top_mut()?;
-                    *left = Value::Bool((*left).gt(&right));
-                }
-                Opcode::Less => {
-                    let right = self.vm.stack.pop()?;
-                    let left = self.vm.stack.top_mut()?;
-                    *left = Value::Bool((*left).lt(&right));
-                }
-                Opcode::Add => {
-                    let right = self.vm.stack.pop()?;
-                    let left = self.vm.stack.top_mut()?;
-                    *left = left.add(&right)?;
-                }
-                Opcode::Subtract => {
-                    let right = self.vm.stack.pop()?;
-                    let left = self.vm.stack.top_mut()?;
-                    *left = left.sub(&right)?;
-                }
-                Opcode::Multiply => {
-                    let right = self.vm.stack.pop()?;
-                    let left = self.vm.stack.top_mut()?;
-                    *left = left.mul(&right)?;
-                }
-                Opcode::Divide => {
-                    let right = self.vm.stack.pop()?;
-                    let left = self.vm.stack.top_mut()?;
-                    *left = left.div(&right)?;
-                }
-                Opcode::Not => {
-                    let v = self.vm.stack.top_mut()?;
-                    *v = v.not();
-                }
-                Opcode::Negate => {
-                    let v = self.vm.stack.top_mut()?;
-                    *v = v.neg()?;
-                }
-                Opcode::Return => {
+                Opcode::NE => self.binary(|l, r| Ok(Value::Bool(l.ne(r))))?,
+                Opcode::EQ => self.binary(|l, r| Ok(Value::Bool(l.eq(r))))?,
+                Opcode::GT => self.binary(|l, r| Ok(Value::Bool(l.gt(r))))?,
+                Opcode::GE => self.binary(|l, r| Ok(Value::Bool(l.ge(r))))?,
+                Opcode::LT => self.binary(|l, r| Ok(Value::Bool(l.lt(r))))?,
+                Opcode::LE => self.binary(|l, r| Ok(Value::Bool(l.le(r))))?,
+                Opcode::Add => self.binary(|l, r| Ok(l.add(r)?))?,
+                Opcode::Sub => self.binary(|l, r| Ok(l.sub(r)?))?,
+                Opcode::Mul => self.binary(|l, r| Ok(l.mul(r)?))?,
+                Opcode::Div => self.binary(|l, r| Ok(l.div(r)?))?,
+                Opcode::Not => self.unary(|v| Ok(v.not()))?,
+                Opcode::Neg => self.unary(|v| Ok(v.neg()?))?,
+                Opcode::Ret => {
                     let v = self.vm.stack.pop()?;
                     self.vm.print(v);
                     break;
@@ -178,6 +141,25 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
                 _ => unreachable!(),
             }
         }
+        Ok(())
+    }
+
+    fn unary<F>(&mut self, func: F) -> Result<(), RuntimeError>
+    where
+        F: Fn(&Value) -> Result<Value, RuntimeError>,
+    {
+        let v = self.vm.stack.top_mut()?;
+        *v = func(v)?;
+        Ok(())
+    }
+
+    fn binary<F>(&mut self, func: F) -> Result<(), RuntimeError>
+    where
+        F: Fn(&Value, &Value) -> Result<Value, RuntimeError>,
+    {
+        let right = self.vm.stack.pop()?;
+        let left = self.vm.stack.top_mut()?;
+        *left = func(left, &right)?;
         Ok(())
     }
 }

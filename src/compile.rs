@@ -153,7 +153,7 @@ impl<'src> Parser<'src> {
         self.advance()?;
         self.expression()?;
         self.consume(Kind::Eof, "Expect end of expression.")?;
-        self.emit(Opcode::Return);
+        self.emit(Opcode::Ret);
         Ok(mem::take(self.chunk_mut()))
     }
 
@@ -209,7 +209,7 @@ impl<'src> Parser<'src> {
         self.parse_precedence(Precedence::Unary)?;
         match token_kind {
             Kind::Bang => self.emit(Opcode::Not),
-            Kind::Minus => self.emit(Opcode::Negate),
+            Kind::Minus => self.emit(Opcode::Neg),
             _ => unreachable!(),
         }
         Ok(())
@@ -219,25 +219,16 @@ impl<'src> Parser<'src> {
         let token_kind = self.token_prev.kind;
         self.parse_precedence(Precedence::of(token_kind).next())?;
         match token_kind {
-            Kind::BangEqual => {
-                self.emit(Opcode::Equal);
-                self.emit(Opcode::Not);
-            }
-            Kind::EqualEqual => self.emit(Opcode::Equal),
-            Kind::Greater => self.emit(Opcode::Greater),
-            Kind::GreaterEqual => {
-                self.emit(Opcode::Less);
-                self.emit(Opcode::Not);
-            }
-            Kind::Less => self.emit(Opcode::Less),
-            Kind::LessEqual => {
-                self.emit(Opcode::Greater);
-                self.emit(Opcode::Not);
-            }
+            Kind::BangEqual => self.emit(Opcode::NE),
+            Kind::EqualEqual => self.emit(Opcode::EQ),
+            Kind::Greater => self.emit(Opcode::GT),
+            Kind::GreaterEqual => self.emit(Opcode::GE),
+            Kind::Less => self.emit(Opcode::LT),
+            Kind::LessEqual => self.emit(Opcode::LE),
             Kind::Plus => self.emit(Opcode::Add),
-            Kind::Minus => self.emit(Opcode::Subtract),
-            Kind::Star => self.emit(Opcode::Multiply),
-            Kind::Slash => self.emit(Opcode::Divide),
+            Kind::Minus => self.emit(Opcode::Sub),
+            Kind::Star => self.emit(Opcode::Mul),
+            Kind::Slash => self.emit(Opcode::Div),
             _ => unreachable!(),
         }
         Ok(())
@@ -266,7 +257,7 @@ impl<'src> Parser<'src> {
     fn emit_constant(&mut self, value: Value) -> Result<(), CompileError> {
         let line = self.token_prev.line;
         let chunk = self.chunk_mut();
-        chunk.write(Opcode::Constant, line);
+        chunk.write(Opcode::Const, line);
         chunk.write_constant(value, line)?;
         Ok(())
     }

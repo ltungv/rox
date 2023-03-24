@@ -21,7 +21,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 #[repr(u8)]
 pub enum Opcode {
     /// Load a constant
-    Constant = 0,
+    Const = 0,
     /// Load a `nil` value
     Nil = 1,
     /// Load a `true` value
@@ -50,48 +50,54 @@ pub enum Opcode {
     SetProperty = 13,
     /// Get the super class instance of the current class
     GetSuper = 14,
+    /// Check for inequality between 2 operands.
+    NE = 15,
     /// Check for equality between 2 operands.
-    Equal = 15,
+    EQ = 16,
     /// Compare if the first operand is greater than the second
-    Greater = 16,
+    GT = 17,
+    /// Compare if the first operand is greater than or equal the second
+    GE = 18,
     /// Compare if the first operand is less than the second
-    Less = 17,
+    LT = 19,
+    /// Compare if the first operand is less than or equal the second
+    LE = 20,
     /// Add two number operands or two string operands
-    Add = 18,
+    Add = 21,
     /// Subtract two number operands
-    Subtract = 19,
+    Sub = 22,
     /// Multiply two number operands
-    Multiply = 20,
+    Mul = 23,
     /// Divide two number operands
-    Divide = 21,
+    Div = 24,
     /// Apply logical `not` to a single boolean operand
-    Not = 22,
+    Not = 25,
     /// Negate a single number operand
-    Negate = 23,
+    Neg = 26,
     /// Print an expression in human readable format
-    Print = 24,
+    Print = 27,
     /// Jump forward for n instructions
-    Jump = 25,
+    Jump = 28,
     /// Jump forward for n instructions if current stack top is falsey
-    JumpIfFalse = 26,
+    JumpIfFalse = 29,
     /// Jump backward for n instructions
-    Loop = 27,
+    Loop = 30,
     /// Make a function call
-    Call = 28,
+    Call = 31,
     /// Invoke method call directly without going though an access operation
-    Invoke = 29,
+    Invoke = 32,
     /// Invoke super call directly without going though an access operation
-    SuperInvoke = 30,
+    SuperInvoke = 33,
     /// Add a new closure
-    Closure = 31,
+    Closure = 34,
     /// Move captured value to the heap
-    CloseUpvalue = 32,
+    CloseUpvalue = 35,
     /// Return from the current function
-    Return = 33,
+    Ret = 36,
     /// Create a class and bind it to a name
-    Class = 34,
+    Class = 37,
     /// Create a inheritance relation between two classes
-    Inherit = 35,
+    Inherit = 38,
     /// Define a method
-    Method = 36,
+    Method = 39,
 }
