@@ -122,13 +122,13 @@ impl<'src> Parser<'src> {
     }
 
     pub(crate) fn compile(&mut self) -> Result<Chunk, CompileError> {
-        let result = self.build_chunk();
-        if let Err(err) = &result {
+        self.build_chunk().map_err(|err| {
+            // Print out error message and debuging information when there's an error.
             #[cfg(debug_assertions)]
             disassemble_chunk(self.chunk_mut(), "code");
 
             match err {
-                CompileError::Generic(msg) => eprintln!("{msg}"),
+                CompileError::Generic(ref msg) => eprintln!("{msg}"),
                 _ => eprintln!(
                     "{}",
                     self.error_at(
@@ -138,8 +138,8 @@ impl<'src> Parser<'src> {
                     )
                 ),
             }
-        }
-        result
+            err
+        })
     }
 
     fn build_chunk(&mut self) -> Result<Chunk, CompileError> {
@@ -155,10 +155,9 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompileError> {
-        self.advance();
         let can_assign = precedence <= Precedence::Assignment;
+        self.advance();
         self.prefix_rule(can_assign)?;
-
         while precedence <= Precedence::of(self.token_curr.kind) {
             self.advance();
             self.infix_rule(can_assign)?;
