@@ -154,63 +154,6 @@ impl<'src> Parser<'src> {
         self.parse_precedence(Precedence::Assignment)
     }
 
-    fn grouping(&mut self) -> Result<(), CompileError> {
-        self.expression()?;
-        self.consume(Kind::RParen, "Expect ')' after expression")
-    }
-
-    fn number(&mut self) -> Result<(), CompileError> {
-        let value = Value::Number(self.token_prev.lexeme.parse()?);
-        self.emit_constant(value)
-    }
-
-    fn literal(&mut self) {
-        match self.token_prev.kind {
-            Kind::False => self.emit(Opcode::False),
-            Kind::Nil => self.emit(Opcode::Nil),
-            Kind::True => self.emit(Opcode::True),
-            _ => unreachable!(),
-        }
-    }
-
-    fn unary(&mut self) -> Result<(), CompileError> {
-        let token_kind = self.token_prev.kind;
-        self.expression()?;
-        match token_kind {
-            Kind::Minus => self.emit(Opcode::Negate),
-            _ => unreachable!(),
-        }
-        Ok(())
-    }
-
-    fn binary(&mut self) -> Result<(), CompileError> {
-        let token_kind = self.token_prev.kind;
-        self.parse_precedence(Precedence::of(token_kind).next())?;
-        match token_kind {
-            Kind::BangEqual => {
-                self.emit(Opcode::Equal);
-                self.emit(Opcode::Not);
-            }
-            Kind::EqualEqual => self.emit(Opcode::Equal),
-            Kind::Greater => self.emit(Opcode::Greater),
-            Kind::GreaterEqual => {
-                self.emit(Opcode::Less);
-                self.emit(Opcode::Not);
-            }
-            Kind::Less => self.emit(Opcode::Less),
-            Kind::LessEqual => {
-                self.emit(Opcode::Greater);
-                self.emit(Opcode::Not);
-            }
-            Kind::Plus => self.emit(Opcode::Add),
-            Kind::Minus => self.emit(Opcode::Subtract),
-            Kind::Star => self.emit(Opcode::Multiply),
-            Kind::Slash => self.emit(Opcode::Divide),
-            _ => unreachable!(),
-        }
-        Ok(())
-    }
-
     fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompileError> {
         self.advance();
         let can_assign = precedence <= Precedence::Assignment;
@@ -250,6 +193,81 @@ impl<'src> Parser<'src> {
         }
     }
 
+    fn grouping(&mut self) -> Result<(), CompileError> {
+        self.expression()?;
+        self.consume(Kind::RParen, "Expect ')' after expression")
+    }
+
+    fn unary(&mut self) -> Result<(), CompileError> {
+        let token_kind = self.token_prev.kind;
+        self.parse_precedence(Precedence::Unary)?;
+        match token_kind {
+            Kind::Minus => self.emit(Opcode::Negate),
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    fn binary(&mut self) -> Result<(), CompileError> {
+        let token_kind = self.token_prev.kind;
+        self.parse_precedence(Precedence::of(token_kind).next())?;
+        match token_kind {
+            Kind::BangEqual => {
+                self.emit(Opcode::Equal);
+                self.emit(Opcode::Not);
+            }
+            Kind::EqualEqual => self.emit(Opcode::Equal),
+            Kind::Greater => self.emit(Opcode::Greater),
+            Kind::GreaterEqual => {
+                self.emit(Opcode::Less);
+                self.emit(Opcode::Not);
+            }
+            Kind::Less => self.emit(Opcode::Less),
+            Kind::LessEqual => {
+                self.emit(Opcode::Greater);
+                self.emit(Opcode::Not);
+            }
+            Kind::Plus => self.emit(Opcode::Add),
+            Kind::Minus => self.emit(Opcode::Subtract),
+            Kind::Star => self.emit(Opcode::Multiply),
+            Kind::Slash => self.emit(Opcode::Divide),
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    fn number(&mut self) -> Result<(), CompileError> {
+        let value = Value::Number(self.token_prev.lexeme.parse()?);
+        self.emit_constant(value)
+    }
+
+    fn literal(&mut self) {
+        match self.token_prev.kind {
+            Kind::False => self.emit(Opcode::False),
+            Kind::Nil => self.emit(Opcode::Nil),
+            Kind::True => self.emit(Opcode::True),
+            _ => unreachable!(),
+        }
+    }
+
+    fn emit(&mut self, opcode: Opcode) {
+        let line = self.token_prev.line;
+        let chunk = self.chunk_mut();
+        chunk.write(opcode, line);
+    }
+
+    fn emit_constant(&mut self, value: Value) -> Result<(), CompileError> {
+        let line = self.token_prev.line;
+        let chunk = self.chunk_mut();
+        chunk.write(Opcode::Constant, line);
+        chunk.write_constant(value, line)?;
+        Ok(())
+    }
+
+    fn chunk_mut(&mut self) -> &mut Chunk {
+        &mut self.chunk
+    }
+
     fn advance(&mut self) {
         loop {
             match self.scanner.scan() {
@@ -270,24 +288,6 @@ impl<'src> Parser<'src> {
         }
         self.advance();
         Ok(())
-    }
-
-    fn emit(&mut self, opcode: Opcode) {
-        let line = self.token_prev.line;
-        let chunk = self.chunk_mut();
-        chunk.write(opcode, line);
-    }
-
-    fn emit_constant(&mut self, value: Value) -> Result<(), CompileError> {
-        let line = self.token_prev.line;
-        let chunk = self.chunk_mut();
-        chunk.write(Opcode::Constant, line);
-        chunk.write_constant(value, line)?;
-        Ok(())
-    }
-
-    fn chunk_mut(&mut self) -> &mut Chunk {
-        &mut self.chunk
     }
 
     fn error_prev(&mut self, message: &str) -> CompileError {
