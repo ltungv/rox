@@ -19,6 +19,8 @@ pub(crate) struct Stack<T, const N: usize> {
 
 impl<T, const N: usize> Default for Stack<T, N> {
     fn default() -> Self {
+        // SAFETY: This is safe because an uninitialized array is the same as an array of
+        // uninitialized items
         let items = unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() };
         Self { items, pointer: 0 }
     }
@@ -52,6 +54,8 @@ impl<T: Default, const N: usize> Stack<T, N> {
         let value = {
             let mut tmp = MaybeUninit::uninit();
             mem::swap(&mut tmp, &mut self.items[self.pointer]);
+            // SAFETY: We ensure that pointer always points to initialized items. Thus the swap
+            // results in tmp containing initialized data.
             unsafe { tmp.assume_init() }
         };
         Ok(value)
@@ -63,6 +67,7 @@ impl<T: Default, const N: usize> Stack<T, N> {
         }
         let value = {
             let tmp = &mut self.items[self.pointer - 1];
+            // SAFETY: We ensure that pointer always points to initialized items.
             unsafe { &mut *tmp.as_mut_ptr() }
         };
         Ok(value)
