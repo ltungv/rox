@@ -147,7 +147,7 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
                     let left = self.vm.stack.top_mut()?;
                     *left = left.div(&right)?;
                 }
-                _ => todo!(),
+                _ => unreachable!(),
             }
         }
         Ok(())

@@ -5,7 +5,7 @@ use std::{mem, num::ParseFloatError};
 use crate::{
     chunk::{disassemble_chunk, Chunk, ChunkError},
     opcode::Opcode,
-    scan::{Kind, Line, Scanner, Token},
+    scan::{Kind, Line, ScanErrors, Scanner, Token},
     value::Value,
 };
 
@@ -23,6 +23,10 @@ pub enum CompileError {
     /// Errors with arbitrary message.
     #[error("{0}")]
     Generic(String),
+
+    /// Errors from multiple scans.
+    #[error(transparent)]
+    Scans(#[from] ScanErrors),
 }
 
 /// Scan for tokens and emit corresponding bytecodes.
@@ -112,6 +116,7 @@ pub(crate) struct Parser<'src> {
 }
 
 impl<'src> Parser<'src> {
+    /// Create a new parser that reads the given source string.
     pub(crate) fn new(src: &'src str) -> Self {
         Self {
             token_prev: Token::placeholder(),
@@ -121,6 +126,7 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Compile the source and returns its chunk.
     pub(crate) fn compile(&mut self) -> Result<Chunk, CompileError> {
         self.build_chunk().map_err(|err| {
             // Print out error message and debuging information when there's an error.
@@ -128,7 +134,8 @@ impl<'src> Parser<'src> {
             disassemble_chunk(self.chunk_mut(), "code");
 
             match err {
-                CompileError::Generic(ref msg) => eprintln!("{msg}"),
+                CompileError::Generic(_) => eprintln!("{err}"),
+                CompileError::Scans(_) => eprintln!("{err}"),
                 _ => eprintln!(
                     "{}",
                     self.error_at(
@@ -143,7 +150,7 @@ impl<'src> Parser<'src> {
     }
 
     fn build_chunk(&mut self) -> Result<Chunk, CompileError> {
-        self.advance();
+        self.advance()?;
         self.expression()?;
         self.consume(Kind::Eof, "Expect end of expression.")?;
         self.emit(Opcode::Return);
@@ -156,10 +163,10 @@ impl<'src> Parser<'src> {
 
     fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompileError> {
         let can_assign = precedence <= Precedence::Assignment;
-        self.advance();
+        self.advance()?;
         self.prefix_rule(can_assign)?;
         while precedence <= Precedence::of(self.token_curr.kind) {
-            self.advance();
+            self.advance()?;
             self.infix_rule(can_assign)?;
         }
         Ok(())
@@ -267,25 +274,32 @@ impl<'src> Parser<'src> {
         &mut self.chunk
     }
 
-    fn advance(&mut self) {
+    /// Go through the tokens return by the scanner a set up 2 fields `token_prev` and
+    /// `token_curr`.
+    fn advance(&mut self) -> Result<(), CompileError> {
+        let mut scan_errors = ScanErrors::default();
         loop {
             match self.scanner.scan() {
-                Err(err) => {
-                    eprintln!("{err}");
-                }
+                Err(err) => scan_errors.push(err),
                 Ok(token) => {
                     self.token_prev = std::mem::replace(&mut self.token_curr, token);
                     break;
                 }
             }
         }
+        if scan_errors.is_empty() {
+            return Ok(());
+        }
+        Err(CompileError::Scans(scan_errors))
     }
 
+    /// Check if the current token has the given `token_kind`. Return an error with a custom
+    /// message if the condition does not hold.
     fn consume(&mut self, token_kind: Kind, message: &'static str) -> Result<(), CompileError> {
         if self.token_curr.kind != token_kind {
             return Err(self.error_curr(message));
         }
-        self.advance();
+        self.advance()?;
         Ok(())
     }
 
@@ -306,35 +320,35 @@ impl<'src> Parser<'src> {
     }
 }
 
-/// All precedence levels in Lox
+/// All precedence levels in Lox.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Precedence {
-    /// No precedence
+    /// No precedence.
     None,
-    /// Operator `=`
+    /// Operator `=`.
     Assignment,
-    /// Operator `or`
+    /// Operator `or`.
     Or,
-    /// Operator `and`
+    /// Operator `and`.
     And,
-    /// Operator `==` `!=`
+    /// Operator `==` `!=`.
     Equality,
-    /// Operator `<` `>` `<=` `>=`
+    /// Operator `<` `>` `<=` `>=`.
     Comparison,
-    /// Operator `+` `-`
+    /// Operator `+` `-`.
     Term,
-    /// Operator `*` `/`
+    /// Operator `*` `/`.
     Factor,
-    /// Operator `!` `-`
+    /// Operator `!` `-`.
     Unary,
-    /// Operator `.` `()`
+    /// Operator `.` `()`.
     Call,
-    /// Literal and keywords
+    /// Literal and keywords.
     Primary,
 }
 
 impl Precedence {
-    /// Get the immediately higher precedence level
+    /// Get the immediately higher precedence level.
     fn next(&self) -> Self {
         match self {
             Self::None => Self::Assignment,
@@ -351,6 +365,7 @@ impl Precedence {
         }
     }
 
+    /// Get the precedence of a specific token kind.
     fn of(kind: Kind) -> Self {
         match kind {
             Kind::Or => Precedence::Or,

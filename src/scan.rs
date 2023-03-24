@@ -1,4 +1,8 @@
-use std::{fmt, ops, str::Chars};
+use std::{
+    fmt::{self, Display},
+    ops,
+    str::Chars,
+};
 
 use itertools::MultiPeek;
 
@@ -11,6 +15,28 @@ pub enum ScanError {
     /// Encounter an unexpected character while scanning.
     #[error("{0} Error: Unexpected character.")]
     UnexpectedCharacter(Line),
+}
+
+#[derive(thiserror::Error, Debug, Default)]
+pub struct ScanErrors(Vec<ScanError>);
+
+impl ScanErrors {
+    pub(crate) fn push(&mut self, err: ScanError) {
+        self.0.push(err);
+    }
+
+    pub(crate) fn is_empty(&mut self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Display for ScanErrors {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for err in &self.0 {
+            writeln!(f, "{err}")?;
+        }
+        Ok(())
+    }
 }
 
 /// Scanner reads characters from the source code and groups them in to a sequence of tokens.

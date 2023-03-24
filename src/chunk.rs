@@ -76,7 +76,7 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::Multiply => disassemble_simple(offset, "OP_MULTIPLY"),
         Opcode::Divide => disassemble_simple(offset, "OP_DIVIDE"),
         Opcode::Negate => disassemble_simple(offset, "OP_NEGATE"),
-        _ => todo!(),
+        _ => unreachable!(),
     }
 }
 
