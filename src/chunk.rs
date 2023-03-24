@@ -68,14 +68,21 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
     };
     // Print each individual instruction.
     match instruction {
-        Opcode::Return => disassemble_simple(offset, "RETURN"),
-        Opcode::Print => disassemble_simple(offset, "PRINT"),
         Opcode::Constant => disassemble_constant(chunk, offset, "CONSTANT"),
+        Opcode::Nil => disassemble_simple(offset, "OP_NIL"),
+        Opcode::True => disassemble_simple(offset, "OP_TRUE"),
+        Opcode::False => disassemble_simple(offset, "OP_FALSE"),
+        Opcode::Print => disassemble_simple(offset, "PRINT"),
+        Opcode::Equal => disassemble_simple(offset, "OP_EQUAL"),
+        Opcode::Greater => disassemble_simple(offset, "OP_GREATER"),
+        Opcode::Less => disassemble_simple(offset, "OP_LESS"),
         Opcode::Add => disassemble_simple(offset, "OP_ADD"),
         Opcode::Subtract => disassemble_simple(offset, "OP_SUBTRACT"),
         Opcode::Multiply => disassemble_simple(offset, "OP_MULTIPLY"),
         Opcode::Divide => disassemble_simple(offset, "OP_DIVIDE"),
+        Opcode::Not => disassemble_simple(offset, "OP_NOT"),
         Opcode::Negate => disassemble_simple(offset, "OP_NEGATE"),
+        Opcode::Return => disassemble_simple(offset, "RETURN"),
         _ => unreachable!(),
     }
 }

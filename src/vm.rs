@@ -1,6 +1,6 @@
 //! Implementation of the bytecode virtual machine.
 
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, Div, Mul, Neg, Not, Sub};
 
 use crate::{
     chunk::{disassemble_chunk, disassemble_instruction, Chunk},
@@ -110,22 +110,37 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
                 disassemble_instruction(self.chunk, self.ip);
             }
             match Opcode::try_from(self.read_byte())? {
-                Opcode::Return => {
-                    let v = self.vm.stack.pop()?;
-                    self.vm.print(v);
-                    break;
+                Opcode::Constant => {
+                    let constant = self.read_constant().clone();
+                    self.vm.stack.push(constant)?;
+                }
+                Opcode::Nil => {
+                    self.vm.stack.push(Value::Nil)?;
+                }
+                Opcode::True => {
+                    self.vm.stack.push(Value::Bool(true))?;
+                }
+                Opcode::False => {
+                    self.vm.stack.push(Value::Bool(false))?;
                 }
                 Opcode::Print => {
                     let v = self.vm.stack.pop()?;
                     self.vm.print(v);
                 }
-                Opcode::Constant => {
-                    let constant = self.read_constant().clone();
-                    self.vm.stack.push(constant)?;
+                Opcode::Equal => {
+                    let right = self.vm.stack.pop()?;
+                    let left = self.vm.stack.top_mut()?;
+                    *left = Value::Bool((*left).eq(&right));
                 }
-                Opcode::Negate => {
-                    let v = self.vm.stack.top_mut()?;
-                    *v = v.neg()?;
+                Opcode::Greater => {
+                    let right = self.vm.stack.pop()?;
+                    let left = self.vm.stack.top_mut()?;
+                    *left = Value::Bool((*left).gt(&right));
+                }
+                Opcode::Less => {
+                    let right = self.vm.stack.pop()?;
+                    let left = self.vm.stack.top_mut()?;
+                    *left = Value::Bool((*left).lt(&right));
                 }
                 Opcode::Add => {
                     let right = self.vm.stack.pop()?;
@@ -146,6 +161,19 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
                     let right = self.vm.stack.pop()?;
                     let left = self.vm.stack.top_mut()?;
                     *left = left.div(&right)?;
+                }
+                Opcode::Not => {
+                    let v = self.vm.stack.top_mut()?;
+                    *v = v.not();
+                }
+                Opcode::Negate => {
+                    let v = self.vm.stack.top_mut()?;
+                    *v = v.neg()?;
+                }
+                Opcode::Return => {
+                    let v = self.vm.stack.pop()?;
+                    self.vm.print(v);
+                    break;
                 }
                 _ => unreachable!(),
             }

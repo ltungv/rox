@@ -208,6 +208,7 @@ impl<'src> Parser<'src> {
         let token_kind = self.token_prev.kind;
         self.parse_precedence(Precedence::Unary)?;
         match token_kind {
+            Kind::Bang => self.emit(Opcode::Not),
             Kind::Minus => self.emit(Opcode::Negate),
             _ => unreachable!(),
         }
