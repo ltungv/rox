@@ -77,39 +77,18 @@ impl<T: Default, const N: usize> Stack<T, N> {
         Ok(value)
     }
 
-    pub(crate) fn unary<F>(&mut self, func: F) -> Result<(), StackError>
-    where
-        T: Copy,
-        F: Fn(T) -> T,
-    {
-        let v = self.top_mut()?;
-        *v = func(*v);
-        Ok(())
-    }
-
-    pub(crate) fn unary_result<E, F>(&mut self, func: F) -> Result<(), E>
+    pub(crate) fn apply_unary<E, F>(&mut self, mut func: F) -> Result<(), E>
     where
         T: Copy,
         E: From<StackError>,
-        F: Fn(T) -> Result<T, E>,
+        F: FnMut(T) -> Result<T, E>,
     {
         let v = self.top_mut()?;
         *v = func(*v)?;
         Ok(())
     }
 
-    pub(crate) fn binary<F>(&mut self, func: F) -> Result<(), StackError>
-    where
-        T: Copy,
-        F: Fn(T, T) -> T,
-    {
-        let rhs = self.pop()?;
-        let lhs = self.top_mut()?;
-        *lhs = func(*lhs, rhs);
-        Ok(())
-    }
-
-    pub(crate) fn binary_result<E, F>(&mut self, mut func: F) -> Result<(), E>
+    pub(crate) fn apply_binary<E, F>(&mut self, mut func: F) -> Result<(), E>
     where
         T: Copy,
         E: From<StackError>,

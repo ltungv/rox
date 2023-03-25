@@ -2,6 +2,12 @@ use std::{
     collections::HashMap, convert::Infallible, fmt, ops, ptr::NonNull, rc::Rc, str::FromStr,
 };
 
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub enum HeapError {
+    #[error(transparent)]
+    Infallable(#[from] Infallible),
+}
+
 /// A managed heap that cleanups memory using a tracing garbage collector.
 #[derive(Debug, Default)]
 pub(crate) struct Heap {
@@ -20,7 +26,7 @@ impl Heap {
         &mut self,
         lhs: &ObjectHandle,
         rhs: &ObjectHandle,
-    ) -> Result<ObjectHandle, ObjectError> {
+    ) -> Result<ObjectHandle, HeapError> {
         match (&lhs.content, &rhs.content) {
             (ObjectContent::String(s1), ObjectContent::String(s2)) => {
                 let s1 = String::from_str(s1)?;
@@ -71,8 +77,22 @@ impl Heap {
 }
 
 impl Drop for Heap {
+    #[cfg(not(debug_assertions))]
     fn drop(&mut self) {
         while self.pop().is_some() {}
+    }
+
+    #[cfg(debug_assertions)]
+    fn drop(&mut self) {
+        let mut objects_count = 0;
+        while self.pop().is_some() {
+            objects_count += 1;
+        }
+        println!("Heap: Dropped {objects_count} objects");
+        println!("Heap: Iterned string reference strong counts");
+        for s in &self.intern_str {
+            println!("  - '{}': {}", s, Rc::strong_count(s));
+        }
     }
 }
 
@@ -104,15 +124,6 @@ impl Iterator for HeapIter {
         }
         None
     }
-}
-
-#[derive(Debug, Eq, PartialEq, thiserror::Error)]
-pub enum ObjectError {
-    #[error("{0}")]
-    InvalidUse(&'static str),
-
-    #[error(transparent)]
-    Infallable(#[from] Infallible),
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -5,7 +5,7 @@ use std::ops::{Add, Div, Mul, Neg, Not, Sub};
 use crate::{
     chunk::{disassemble_chunk, disassemble_instruction, Chunk},
     compile::Parser,
-    object::Heap,
+    object::{Heap, HeapError},
     opcode::Opcode,
     stack::{Stack, StackError},
     value::{Value, ValueError},
@@ -25,6 +25,10 @@ pub enum RuntimeError {
     /// Can't use the virtual machine's stack.
     #[error(transparent)]
     Stack(#[from] StackError),
+
+    /// Can't use the virtual machine's heap.
+    #[error(transparent)]
+    Heap(#[from] HeapError),
 
     /// Can't perform some operations given the current operand(s).
     #[error(transparent)]
@@ -114,43 +118,21 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
                 Opcode::Nil => self.stack.push(Value::Nil)?,
                 Opcode::True => self.stack.push(Value::Bool(true))?,
                 Opcode::False => self.stack.push(Value::Bool(false))?,
-                Opcode::Print => {
-                    let v = self.stack.pop()?;
-                    self.print(v);
-                }
-                Opcode::NE => self.stack.binary(|l, r| Value::Bool(l.ne(&r)))?,
-                Opcode::EQ => self.stack.binary(|l, r| Value::Bool(l.eq(&r)))?,
-                Opcode::GT => self.stack.binary(|l, r| Value::Bool(l.gt(&r)))?,
-                Opcode::GE => self.stack.binary(|l, r| Value::Bool(l.ge(&r)))?,
-                Opcode::LT => self.stack.binary(|l, r| Value::Bool(l.lt(&r)))?,
-                Opcode::LE => self.stack.binary(|l, r| Value::Bool(l.le(&r)))?,
-                Opcode::Add => {
-                    self.stack
-                        .binary_result::<RuntimeError, _>(|l, r| match (l, r) {
-                            (Value::Object(o1), Value::Object(o2)) => {
-                                let object =
-                                    self.heap.add_objects(&o1, &o2).map_err(ValueError::from)?;
-                                Ok(Value::Object(object))
-                            }
-                            _ => Ok(l.add(&r)?),
-                        })?
-                }
-                Opcode::Sub => self
-                    .stack
-                    .binary_result::<RuntimeError, _>(|l, r| Ok(l.sub(&r)?))?,
-                Opcode::Mul => self
-                    .stack
-                    .binary_result::<RuntimeError, _>(|l, r| Ok(l.mul(&r)?))?,
-                Opcode::Div => self
-                    .stack
-                    .binary_result::<RuntimeError, _>(|l, r| Ok(l.div(&r)?))?,
-                Opcode::Not => self.stack.unary(|v| v.not())?,
-                Opcode::Neg => self
-                    .stack
-                    .unary_result::<RuntimeError, _>(|v| Ok(v.neg()?))?,
+                Opcode::Print => self.print()?,
+                Opcode::NE => self.ne()?,
+                Opcode::EQ => self.eq()?,
+                Opcode::GT => self.gt()?,
+                Opcode::GE => self.ge()?,
+                Opcode::LT => self.lt()?,
+                Opcode::LE => self.le()?,
+                Opcode::Add => self.add()?,
+                Opcode::Sub => self.sub()?,
+                Opcode::Mul => self.mul()?,
+                Opcode::Div => self.div()?,
+                Opcode::Not => self.not()?,
+                Opcode::Neg => self.neg()?,
                 Opcode::Ret => {
-                    let v = self.stack.pop()?;
-                    self.print(v);
+                    self.print()?;
                     break;
                 }
                 _ => unreachable!(),
@@ -159,8 +141,64 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
         Ok(())
     }
 
-    fn print(&mut self, value: Value) {
-        println!("{value}")
+    fn ne(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_binary(|l, r| Ok(Value::Bool(l.ne(&r))))
+    }
+
+    fn eq(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_binary(|l, r| Ok(Value::Bool(l.eq(&r))))
+    }
+
+    fn gt(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_binary(|l, r| Ok(Value::Bool(l.gt(&r))))
+    }
+
+    fn ge(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_binary(|l, r| Ok(Value::Bool(l.ge(&r))))
+    }
+
+    fn lt(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_binary(|l, r| Ok(Value::Bool(l.lt(&r))))
+    }
+
+    fn le(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_binary(|l, r| Ok(Value::Bool(l.le(&r))))
+    }
+
+    fn add(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_binary(|l, r| match (l, r) {
+            (Value::Object(o1), Value::Object(o2)) => {
+                let object = self.heap.add_objects(&o1, &o2)?;
+                Ok(Value::Object(object))
+            }
+            _ => Ok(l.add(&r)?),
+        })
+    }
+
+    fn sub(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_binary(|l, r| Ok(l.sub(&r)?))
+    }
+
+    fn mul(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_binary(|l, r| Ok(l.mul(&r)?))
+    }
+
+    fn div(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_binary(|l, r| Ok(l.div(&r)?))
+    }
+
+    fn not(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_unary(|v| Ok(v.not()))
+    }
+
+    fn neg(&mut self) -> Result<(), RuntimeError> {
+        self.stack.apply_unary(|v| Ok(v.neg()?))
+    }
+
+    fn print(&mut self) -> Result<(), RuntimeError> {
+        let val = self.stack.pop()?;
+        println!("{val}");
+        Ok(())
     }
 
     #[cfg(debug_assertions)]

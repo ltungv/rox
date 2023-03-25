@@ -1,14 +1,11 @@
 use std::{cmp::Ordering, fmt, ops};
 
-use crate::object::{ObjectError, ObjectHandle};
+use crate::object::ObjectHandle;
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ValueError {
     #[error("{0}")]
     InvalidUse(&'static str),
-
-    #[error(transparent)]
-    Object(#[from] ObjectError),
 }
 
 /// A enumeration of all supported primitive types in Lox and their underlying value.
@@ -30,6 +27,7 @@ impl PartialEq for Value {
             (Self::Nil, Self::Nil) => true,
             (Self::Bool(v1), Self::Bool(v2)) => v1 == v2,
             (Self::Number(v1), Self::Number(v2)) => v1.eq(v2),
+            (Self::Object(o1), Self::Object(o2)) => o1.eq(o2),
             _ => false,
         }
     }
