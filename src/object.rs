@@ -17,16 +17,16 @@ pub(crate) struct Heap {
 }
 
 impl Heap {
-    pub(crate) fn alloc_string(&mut self, s: String) -> ObjectHandle {
+    pub(crate) fn alloc_string(&mut self, s: String) -> ObjectRef {
         let content = self.take_string(s);
         self.alloc(content)
     }
 
     pub(crate) fn add_objects(
         &mut self,
-        lhs: &ObjectHandle,
-        rhs: &ObjectHandle,
-    ) -> Result<ObjectHandle, HeapError> {
+        lhs: &ObjectRef,
+        rhs: &ObjectRef,
+    ) -> Result<ObjectRef, HeapError> {
         match (&lhs.content, &rhs.content) {
             (ObjectContent::String(s1), ObjectContent::String(s2)) => {
                 let s1 = String::from_str(s1)?;
@@ -52,14 +52,14 @@ impl Heap {
 
     /// Allocates a new object and returns a handle to it. The object is pushed to the head of
     /// the list of allocated data.
-    fn alloc(&mut self, content: ObjectContent) -> ObjectHandle {
+    fn alloc(&mut self, content: ObjectContent) -> ObjectRef {
         let object = Box::new(Object {
             next: self.head,
             content,
         });
         let object_ptr = NonNull::from(Box::leak(object));
         self.head = Some(object_ptr);
-        ObjectHandle(object_ptr)
+        ObjectRef(object_ptr)
     }
 
     /// Remove the object at the head of the linked list.
@@ -97,7 +97,7 @@ impl Drop for Heap {
 }
 
 impl IntoIterator for &Heap {
-    type Item = ObjectHandle;
+    type Item = ObjectRef;
 
     type IntoIter = HeapIter;
 
@@ -111,7 +111,7 @@ pub(crate) struct HeapIter {
 }
 
 impl Iterator for HeapIter {
-    type Item = ObjectHandle;
+    type Item = ObjectRef;
 
     #[allow(unsafe_code)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -120,16 +120,16 @@ impl Iterator for HeapIter {
             // we still can access the object from the linked list then it must have not been
             // deallocated.
             self.next = unsafe { node.as_ref().next };
-            return Some(ObjectHandle(node));
+            return Some(ObjectRef(node));
         }
         None
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ObjectHandle(NonNull<Object>);
+pub(crate) struct ObjectRef(NonNull<Object>);
 
-impl ops::Deref for ObjectHandle {
+impl ops::Deref for ObjectRef {
     type Target = Object;
 
     #[allow(unsafe_code)]
@@ -140,12 +140,12 @@ impl ops::Deref for ObjectHandle {
     }
 }
 
-impl PartialEq for ObjectHandle {
+impl PartialEq for ObjectRef {
     fn eq(&self, other: &Self) -> bool {
         self.content.eq(&other.content)
     }
 }
-impl fmt::Display for ObjectHandle {
+impl fmt::Display for ObjectRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         write!(f, "{}", self.content)
     }

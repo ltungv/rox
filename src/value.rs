@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, fmt, ops, rc::Rc};
 
-use crate::object::{ObjectContent, ObjectHandle};
+use crate::object::{ObjectContent, ObjectRef};
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ValueError {
@@ -20,7 +20,7 @@ pub(crate) enum Value {
     /// A number value in Lox
     Number(f64),
     /// A heap-allocated object
-    Object(ObjectHandle),
+    Object(ObjectRef),
 }
 
 impl Value {
