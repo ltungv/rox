@@ -106,6 +106,8 @@ pub enum CompileError {
 ///              | "(" expr ")" ;
 /// ```
 pub(crate) struct Parser<'src, 'vm> {
+    /// The flag to indicate that the compilation process had error(s).
+    had_error: bool,
     /// The token previously consumed token.
     token_prev: Token<'src>,
     /// The token currently consumed token.
@@ -122,6 +124,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Create a new parser that reads the given source string.
     pub(crate) fn new(src: &'src str, heap: &'vm mut Heap) -> Self {
         Self {
+            had_error: false,
             token_prev: Token::placeholder(),
             token_curr: Token::placeholder(),
             scanner: Scanner::new(src),
@@ -131,34 +134,105 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     /// Compile the source and returns its chunk.
-    pub(crate) fn compile(&mut self) -> Result<Chunk, CompileError> {
-        self.build_chunk().map_err(|err| {
-            // Print out error message and debuging information when there's an error.
+    pub(crate) fn compile(&mut self) -> Option<Chunk> {
+        let chunk = self.build_chunk();
+        if self.had_error {
             #[cfg(debug_assertions)]
-            disassemble_chunk(self.chunk_mut(), "code");
-
-            match err {
-                CompileError::Generic(_) => eprintln!("{err}"),
-                CompileError::Scans(_) => eprintln!("{err}"),
-                _ => eprintln!(
-                    "{}",
-                    self.error_at(
-                        self.token_prev.line,
-                        self.token_prev.lexeme,
-                        &err.to_string()
-                    )
-                ),
-            }
-            err
-        })
+            disassemble_chunk(&chunk, "code");
+            return None;
+        }
+        Some(chunk)
     }
 
-    fn build_chunk(&mut self) -> Result<Chunk, CompileError> {
-        self.advance()?;
-        self.expression()?;
-        self.consume(Kind::Eof, "Expect end of expression.")?;
+    fn build_chunk(&mut self) -> Chunk {
+        self.advance();
+        while !self.advance_if(Kind::Eof) {
+            if let Err(err) = self.declaration() {
+                eprintln!("{err}");
+                self.synchronize();
+            }
+        }
         self.emit(Opcode::Ret);
-        Ok(mem::take(self.chunk_mut()))
+        mem::take(self.chunk_mut())
+    }
+
+    fn declaration(&mut self) -> Result<(), CompileError> {
+        if self.advance_if(Kind::Var) {
+            self.var_declaration()?;
+        } else {
+            self.statement()?;
+        }
+        Ok(())
+    }
+
+    fn statement(&mut self) -> Result<(), CompileError> {
+        if self.advance_if(Kind::Print) {
+            self.print_statement()?;
+        } else {
+            self.expression_statement()?;
+        }
+        Ok(())
+    }
+
+    fn print_statement(&mut self) -> Result<(), CompileError> {
+        self.expression()?;
+        self.consume(Kind::Semicolon, "Expect ';' after value.")?;
+        self.emit(Opcode::Print);
+        Ok(())
+    }
+
+    fn expression_statement(&mut self) -> Result<(), CompileError> {
+        self.expression()?;
+        self.consume(Kind::Semicolon, "Expect ';' after expression.")?;
+        self.emit(Opcode::Pop);
+        Ok(())
+    }
+
+    fn synchronize(&mut self) {
+        self.had_error = true;
+        while !self.check_curr(Kind::Eof) {
+            if self.check_prev(Kind::Semicolon)
+                || self.check_curr(Kind::Class)
+                || self.check_curr(Kind::Fun)
+                || self.check_curr(Kind::Var)
+                || self.check_curr(Kind::For)
+                || self.check_curr(Kind::If)
+                || self.check_curr(Kind::While)
+                || self.check_curr(Kind::Print)
+                || self.check_curr(Kind::Return)
+            {
+                return;
+            }
+            self.advance();
+        }
+    }
+
+    fn var_declaration(&mut self) -> Result<(), CompileError> {
+        let global_id = self.parse_variable("Expect variable name.")?;
+        if self.advance_if(Kind::Equal) {
+            self.expression()?;
+        } else {
+            self.emit(Opcode::Nil);
+        }
+        self.consume(Kind::Semicolon, "Expect ';' after variable declaration.")?;
+        self.define_variable(global_id);
+        Ok(())
+    }
+
+    fn parse_variable(&mut self, message: &str) -> Result<u8, CompileError> {
+        self.consume(Kind::Ident, message)?;
+        self.identifier_constant(self.token_prev)
+    }
+
+    fn identifier_constant(&mut self, name: Token<'_>) -> Result<u8, CompileError> {
+        let s = String::from(name.lexeme.trim_matches('"'));
+        let value = Value::Object(self.heap.alloc_string(s));
+        self.make_constant(value)
+    }
+
+    fn define_variable(&mut self, global_id: u8) {
+        self.emit(Opcode::DefineGlobal);
+        self.emit_byte(global_id);
     }
 
     fn expression(&mut self) -> Result<(), CompileError> {
@@ -167,19 +241,23 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompileError> {
         let can_assign = precedence <= Precedence::Assignment;
-        self.advance()?;
+        self.advance();
         self.prefix_rule(can_assign)?;
         while precedence <= Precedence::of(self.token_curr.kind) {
-            self.advance()?;
-            self.infix_rule(can_assign)?;
+            self.advance();
+            self.infix_rule()?;
+        }
+        if can_assign && self.advance_if(Kind::Equal) {
+            return Err(self.error_prev("Invalid assignment target."));
         }
         Ok(())
     }
 
-    fn prefix_rule(&mut self, _can_assign: bool) -> Result<(), CompileError> {
+    fn prefix_rule(&mut self, can_assign: bool) -> Result<(), CompileError> {
         match self.token_prev.kind {
             Kind::LParen => self.grouping()?,
             Kind::Minus | Kind::Bang => self.unary()?,
+            Kind::Ident => self.variable(can_assign)?,
             Kind::String => self.string()?,
             Kind::Number => self.number()?,
             Kind::True | Kind::False | Kind::Nil => self.literal(),
@@ -188,7 +266,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         Ok(())
     }
 
-    fn infix_rule(&mut self, _can_assign: bool) -> Result<(), CompileError> {
+    fn infix_rule(&mut self) -> Result<(), CompileError> {
         match self.token_prev.kind {
             Kind::Minus
             | Kind::Plus
@@ -239,6 +317,24 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         Ok(())
     }
 
+    fn variable(&mut self, can_assign: bool) -> Result<(), CompileError> {
+        self.named_variable(self.token_prev, can_assign)?;
+        Ok(())
+    }
+
+    fn named_variable(&mut self, name: Token<'_>, can_assign: bool) -> Result<(), CompileError> {
+        let arg = self.identifier_constant(name)?;
+        if can_assign && self.advance_if(Kind::Equal) {
+            self.expression()?;
+            self.emit(Opcode::SetGlobal);
+            self.emit_byte(arg);
+        } else {
+            self.emit(Opcode::GetGlobal);
+            self.emit_byte(arg);
+        }
+        Ok(())
+    }
+
     fn string(&mut self) -> Result<(), CompileError> {
         let s = String::from(self.token_prev.lexeme.trim_matches('"'));
         let value = Value::Object(self.heap.alloc_string(s));
@@ -266,12 +362,24 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         chunk.write(opcode, line);
     }
 
+    fn emit_byte(&mut self, byte: u8) {
+        let line = self.token_prev.line;
+        let chunk = self.chunk_mut();
+        chunk.write_byte(byte, line);
+    }
+
     fn emit_constant(&mut self, value: Value) -> Result<(), CompileError> {
+        let constant_id = self.make_constant(value)?;
         let line = self.token_prev.line;
         let chunk = self.chunk_mut();
         chunk.write(Opcode::Const, line);
-        chunk.write_constant(value, line)?;
+        chunk.write_byte(constant_id, line);
         Ok(())
+    }
+
+    fn make_constant(&mut self, value: Value) -> Result<u8, CompileError> {
+        let chunk = self.chunk_mut();
+        Ok(chunk.write_constant(value)?)
     }
 
     fn chunk_mut(&mut self) -> &mut Chunk {
@@ -280,7 +388,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Go through the tokens return by the scanner a set up 2 fields `token_prev` and
     /// `token_curr`.
-    fn advance(&mut self) -> Result<(), CompileError> {
+    fn advance(&mut self) {
         let mut scan_errors = ScanErrors::default();
         loop {
             match self.scanner.scan() {
@@ -291,20 +399,36 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                 }
             }
         }
-        if scan_errors.is_empty() {
-            return Ok(());
+        if !scan_errors.is_empty() {
+            self.had_error = true;
+            eprintln!("{scan_errors}");
         }
-        Err(CompileError::Scans(scan_errors))
+    }
+
+    fn advance_if(&mut self, kind: Kind) -> bool {
+        if !self.check_curr(kind) {
+            return false;
+        }
+        self.advance();
+        true
     }
 
     /// Check if the current token has the given `token_kind`. Return an error with a custom
     /// message if the condition does not hold.
-    fn consume(&mut self, token_kind: Kind, message: &'static str) -> Result<(), CompileError> {
-        if self.token_curr.kind != token_kind {
+    fn consume(&mut self, token_kind: Kind, message: &str) -> Result<(), CompileError> {
+        if !self.check_curr(token_kind) {
             return Err(self.error_curr(message));
         }
-        self.advance()?;
+        self.advance();
         Ok(())
+    }
+
+    fn check_curr(&self, kind: Kind) -> bool {
+        self.token_curr.kind == kind
+    }
+
+    fn check_prev(&self, kind: Kind) -> bool {
+        self.token_prev.kind == kind
     }
 
     fn error_prev(&mut self, message: &str) -> CompileError {

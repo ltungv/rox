@@ -38,7 +38,9 @@ fn run_repl() {
                 if n == 0 {
                     break;
                 }
-                vm.interpret(&line).ok();
+                if let Err(e) = vm.interpret(&line) {
+                    eprintln!("{e}");
+                }
             }
         }
     }

@@ -1,11 +1,13 @@
-use std::{cmp::Ordering, fmt, ops};
+use std::{cmp::Ordering, fmt, ops, rc::Rc};
 
-use crate::object::ObjectHandle;
+use crate::object::{ObjectContent, ObjectHandle};
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ValueError {
     #[error("{0}")]
     InvalidUse(&'static str),
+    #[error("Invalid cast")]
+    InvalidCast,
 }
 
 /// A enumeration of all supported primitive types in Lox and their underlying value.
@@ -19,6 +21,18 @@ pub(crate) enum Value {
     Number(f64),
     /// A heap-allocated object
     Object(ObjectHandle),
+}
+
+impl Value {
+    /// Cast the value as a constant string
+    pub fn as_str(&self) -> Result<Rc<str>, ValueError> {
+        if let Value::Object(o) = self {
+            if let ObjectContent::String(s) = &o.content {
+                return Ok(Rc::clone(s));
+            }
+        }
+        Err(ValueError::InvalidCast)
+    }
 }
 
 impl PartialEq for Value {

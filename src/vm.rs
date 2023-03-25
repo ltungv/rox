@@ -1,6 +1,10 @@
 //! Implementation of the bytecode virtual machine.
 
-use std::ops::{Add, Div, Mul, Neg, Not, Sub};
+use std::{
+    collections::HashMap,
+    ops::{Add, Div, Mul, Neg, Not, Sub},
+    rc::Rc,
+};
 
 use crate::{
     chunk::{disassemble_chunk, disassemble_instruction, Chunk},
@@ -33,6 +37,10 @@ pub enum RuntimeError {
     /// Can't perform some operations given the current operand(s).
     #[error(transparent)]
     Value(#[from] ValueError),
+
+    /// Can't find a variable in scope.
+    #[error("Undefined variable '{0}'")]
+    UndefinedVariable(String),
 }
 
 /// A bytecode virtual machine for the Lox programming language.
@@ -40,6 +48,7 @@ pub enum RuntimeError {
 pub struct VirtualMachine {
     heap: Heap,
     stack: Stack<Value, VM_STACK_SIZE>,
+    globals: HashMap<Rc<str>, Value>,
 }
 
 impl VirtualMachine {
@@ -48,6 +57,7 @@ impl VirtualMachine {
         Self {
             heap: Heap::default(),
             stack: Stack::default(),
+            globals: HashMap::default(),
         }
     }
 }
@@ -56,12 +66,11 @@ impl VirtualMachine {
     /// Compile and execute the given source code.
     pub fn interpret(&mut self, src: &str) -> Result<(), InterpretError> {
         let mut parser = Parser::new(src, &mut self.heap);
-        let chunk = parser.compile()?;
-
-        #[cfg(debug_assertions)]
-        disassemble_chunk(&chunk, "code");
-
-        self.run(&chunk)?;
+        if let Some(chunk) = parser.compile() {
+            #[cfg(debug_assertions)]
+            disassemble_chunk(&chunk, "code");
+            self.run(&chunk)?;
+        }
         Ok(())
     }
 
@@ -73,19 +82,21 @@ impl VirtualMachine {
 }
 
 struct Task<'vm, 'chunk> {
+    ip: usize,
+    chunk: &'chunk Chunk,
     stack: &'vm mut Stack<Value, VM_STACK_SIZE>,
     heap: &'vm mut Heap,
-    chunk: &'chunk Chunk,
-    ip: usize,
+    globals: &'vm mut HashMap<Rc<str>, Value>,
 }
 
 impl<'vm, 'chunk> Task<'vm, 'chunk> {
     fn new(vm: &'vm mut VirtualMachine, chunk: &'chunk Chunk) -> Self {
         Self {
+            ip: 0,
+            chunk,
             stack: &mut vm.stack,
             heap: &mut vm.heap,
-            chunk,
-            ip: 0,
+            globals: &mut vm.globals,
         }
     }
 
@@ -111,13 +122,16 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
                 disassemble_instruction(self.chunk, self.ip);
             }
             match Opcode::try_from(self.read_byte())? {
-                Opcode::Const => {
-                    let constant = *self.read_constant();
-                    self.stack.push(constant)?;
-                }
+                Opcode::Const => self.constant()?,
                 Opcode::Nil => self.stack.push(Value::Nil)?,
                 Opcode::True => self.stack.push(Value::Bool(true))?,
                 Opcode::False => self.stack.push(Value::Bool(false))?,
+                Opcode::Pop => {
+                    self.stack.pop()?;
+                }
+                Opcode::GetGlobal => self.get_global()?,
+                Opcode::DefineGlobal => self.defined_global()?,
+                Opcode::SetGlobal => self.set_global()?,
                 Opcode::Print => self.print()?,
                 Opcode::NE => self.ne()?,
                 Opcode::EQ => self.eq()?,
@@ -131,13 +145,44 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
                 Opcode::Div => self.div()?,
                 Opcode::Not => self.not()?,
                 Opcode::Neg => self.neg()?,
-                Opcode::Ret => {
-                    self.print()?;
-                    break;
-                }
+                Opcode::Ret => break,
                 _ => unreachable!(),
             }
         }
+        Ok(())
+    }
+
+    fn get_global(&mut self) -> Result<(), RuntimeError> {
+        let name = self.read_constant().as_str()?;
+        let value = self
+            .globals
+            .get(&name)
+            .ok_or_else(|| RuntimeError::UndefinedVariable(name.to_string()))?;
+        self.stack.push(*value)?;
+        Ok(())
+    }
+
+    fn set_global(&mut self) -> Result<(), RuntimeError> {
+        let name = self.read_constant().as_str()?;
+        let value = self.stack.top()?;
+        if self.globals.insert(Rc::clone(&name), *value).is_none() {
+            self.globals.remove(&name);
+            return Err(RuntimeError::UndefinedVariable(name.to_string()));
+        }
+        Ok(())
+    }
+
+    fn defined_global(&mut self) -> Result<(), RuntimeError> {
+        let constant = *self.read_constant();
+        let global_name = constant.as_str()?;
+        let global_value = self.stack.pop()?;
+        self.globals.insert(global_name, global_value);
+        Ok(())
+    }
+
+    fn constant(&mut self) -> Result<(), RuntimeError> {
+        let constant = *self.read_constant();
+        self.stack.push(constant)?;
         Ok(())
     }
 

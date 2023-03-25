@@ -64,6 +64,20 @@ impl<T: Default, const N: usize> Stack<T, N> {
     }
 
     #[allow(unsafe_code)]
+    pub(crate) fn top(&self) -> Result<&T, StackError> {
+        if self.pointer == 0 {
+            return Err(StackError::Exhausted);
+        }
+        let value = {
+            let tmp = &self.items[self.pointer - 1];
+            // SAFETY: We ensure that pointer always points to initialized items. Thus, tmp
+            // must contain initialized data.
+            unsafe { &*tmp.as_ptr() }
+        };
+        Ok(value)
+    }
+
+    #[allow(unsafe_code)]
     pub(crate) fn top_mut(&mut self) -> Result<&mut T, StackError> {
         if self.pointer == 0 {
             return Err(StackError::Exhausted);

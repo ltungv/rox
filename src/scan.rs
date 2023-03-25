@@ -283,7 +283,7 @@ impl<'src> Scanner<'src> {
 }
 
 /// Implementation of tokens that are allowed in Lox.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Token<'src> {
     /// The kind of token.
     pub(crate) kind: Kind,

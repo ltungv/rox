@@ -40,14 +40,13 @@ impl Chunk {
     }
 
     /// Write a constant along with an instruction to load it into the chunk.
-    pub(crate) fn write_constant(&mut self, value: Value, line: Line) -> Result<(), ChunkError> {
+    pub(crate) fn write_constant(&mut self, value: Value) -> Result<u8, ChunkError> {
         let constant_id = self.constants.len();
         if constant_id >= u8::MAX.into() {
             return Err(ChunkError::ConstantLimitExceeded);
         }
         self.constants.push(value);
-        self.write_byte(constant_id as u8, line);
-        Ok(())
+        Ok(constant_id as u8)
     }
 
     pub(crate) fn get_line(&self, offset: usize) -> Line {
@@ -94,7 +93,11 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::Nil => disassemble_simple(offset, "OP_NIL"),
         Opcode::True => disassemble_simple(offset, "OP_TRUE"),
         Opcode::False => disassemble_simple(offset, "OP_FALSE"),
-        Opcode::Print => disassemble_simple(offset, "PRINT"),
+        Opcode::Pop => disassemble_simple(offset, "OP_POP"),
+        Opcode::GetGlobal => disassemble_constant(chunk, offset, "OP_GET_GLOBAL"),
+        Opcode::DefineGlobal => disassemble_constant(chunk, offset, "OP_DEFINE_GLOBAL"),
+        Opcode::SetGlobal => disassemble_constant(chunk, offset, "OP_SET_GLOBAL"),
+        Opcode::Print => disassemble_simple(offset, "OP_PRINT"),
         Opcode::NE => disassemble_simple(offset, "OP_NE"),
         Opcode::EQ => disassemble_simple(offset, "OP_EQ"),
         Opcode::GT => disassemble_simple(offset, "OP_GT"),
