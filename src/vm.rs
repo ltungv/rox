@@ -5,6 +5,7 @@ use std::ops::{Add, Div, Mul, Neg, Not, Sub};
 use crate::{
     chunk::{disassemble_chunk, disassemble_instruction, Chunk},
     compile::Parser,
+    object::Heap,
     opcode::Opcode,
     stack::{Stack, StackError},
     value::{Value, ValueError},
@@ -33,6 +34,7 @@ pub enum RuntimeError {
 /// A bytecode virtual machine for the Lox programming language.
 #[derive(Default)]
 pub struct VirtualMachine {
+    heap: Heap,
     stack: Stack<Value, VM_STACK_SIZE>,
 }
 
@@ -40,6 +42,7 @@ impl VirtualMachine {
     /// Create a new virtual machine that prints to the given output.
     pub fn new() -> Self {
         Self {
+            heap: Heap::default(),
             stack: Stack::default(),
         }
     }
@@ -52,12 +55,21 @@ impl VirtualMachine {
         }
         println!();
     }
+
+    #[cfg(debug_assertions)]
+    fn heap_trace(&self) {
+        print!("          ");
+        for object in &self.heap {
+            print!("[ {object} ]");
+        }
+        println!();
+    }
 }
 
 impl VirtualMachine {
     /// Compile and execute the given source code.
     pub fn interpret(&mut self, src: &str) -> Result<(), InterpretError> {
-        let mut parser = Parser::new(src);
+        let mut parser = Parser::new(src, &mut self.heap);
         let chunk = parser.compile()?;
 
         #[cfg(debug_assertions)]
@@ -106,6 +118,7 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
         loop {
             #[cfg(debug_assertions)]
             {
+                self.vm.heap_trace();
                 self.vm.stack_trace();
                 disassemble_instruction(self.chunk, self.ip);
             }

@@ -1,6 +1,6 @@
 //! An interpreter for the Lox programming language.
 
-#![deny(rust_2018_idioms, rust_2021_compatibility)]
+#![deny(rust_2018_idioms, rust_2021_compatibility, clippy::all, unsafe_code)]
 #![warn(missing_docs)]
 
 mod chunk;

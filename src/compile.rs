@@ -4,6 +4,7 @@ use std::{mem, num::ParseFloatError};
 
 use crate::{
     chunk::{disassemble_chunk, Chunk, ChunkError},
+    object::{Heap, ObjectContent},
     opcode::Opcode,
     scan::{Kind, Line, ScanErrors, Scanner, Token},
     value::Value,
@@ -104,24 +105,27 @@ pub enum CompileError {
 ///              | "true" | "false" | "nil"
 ///              | "(" expr ")" ;
 /// ```
-pub(crate) struct Parser<'src> {
+pub(crate) struct Parser<'src, 'vm> {
     /// The token previously consumed token.
     token_prev: Token<'src>,
     /// The token currently consumed token.
     token_curr: Token<'src>,
     /// The scanner for turning source bytes into tokens.
     scanner: Scanner<'src>,
+    /// The heap of the currently running virtual machine.
+    heap: &'vm mut Heap,
     /// The chunk that is being written to.
     chunk: Chunk,
 }
 
-impl<'src> Parser<'src> {
+impl<'src, 'vm> Parser<'src, 'vm> {
     /// Create a new parser that reads the given source string.
-    pub(crate) fn new(src: &'src str) -> Self {
+    pub(crate) fn new(src: &'src str, heap: &'vm mut Heap) -> Self {
         Self {
             token_prev: Token::placeholder(),
             token_curr: Token::placeholder(),
             scanner: Scanner::new(src),
+            heap,
             chunk: Chunk::default(),
         }
     }
@@ -176,6 +180,7 @@ impl<'src> Parser<'src> {
         match self.token_prev.kind {
             Kind::LParen => self.grouping()?,
             Kind::Minus | Kind::Bang => self.unary()?,
+            Kind::String => self.string()?,
             Kind::Number => self.number()?,
             Kind::True | Kind::False | Kind::Nil => self.literal(),
             _ => return Err(self.error_prev("Expect expression")),
@@ -231,6 +236,14 @@ impl<'src> Parser<'src> {
             Kind::Slash => self.emit(Opcode::Div),
             _ => unreachable!(),
         }
+        Ok(())
+    }
+
+    fn string(&mut self) -> Result<(), CompileError> {
+        let s = String::from(self.token_prev.lexeme.trim_matches('"')).into_boxed_str();
+        let obj_content = ObjectContent::String(s);
+        let value = Value::Object(self.heap.alloc(obj_content));
+        self.emit_constant(value)?;
         Ok(())
     }
 

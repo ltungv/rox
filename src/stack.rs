@@ -18,6 +18,7 @@ pub(crate) struct Stack<T, const N: usize> {
 }
 
 impl<T, const N: usize> Default for Stack<T, N> {
+    #[allow(unsafe_code)]
     fn default() -> Self {
         // SAFETY: This is safe because an uninitialized array is the same as an array of
         // uninitialized items
@@ -46,6 +47,7 @@ impl<T: Default, const N: usize> Stack<T, N> {
     /// # Errors
     ///
     /// If the stack is empty, return RuntimeError::StackExhausted.
+    #[allow(unsafe_code)]
     pub(crate) fn pop(&mut self) -> Result<T, StackError> {
         if self.pointer == 0 {
             return Err(StackError::Exhausted);
@@ -61,6 +63,7 @@ impl<T: Default, const N: usize> Stack<T, N> {
         Ok(value)
     }
 
+    #[allow(unsafe_code)]
     pub(crate) fn top_mut(&mut self) -> Result<&mut T, StackError> {
         if self.pointer == 0 {
             return Err(StackError::Exhausted);
@@ -95,6 +98,7 @@ pub(crate) struct StackIter<'stack, T, const N: usize> {
 impl<'stack, T, const N: usize> Iterator for StackIter<'stack, T, N> {
     type Item = &'stack T;
 
+    #[allow(unsafe_code)]
     fn next(&mut self) -> Option<Self::Item> {
         if self.pointer >= self.stack.pointer {
             return None;

@@ -1,11 +1,14 @@
 use std::{cmp::Ordering, fmt, ops};
 
-use crate::object::Object;
+use crate::object::{ObjectError, ObjectHandle};
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ValueError {
     #[error("{0}")]
     InvalidUse(&'static str),
+
+    #[error(transparent)]
+    Object(#[from] ObjectError),
 }
 
 /// A enumeration of all supported primitive types in Lox and their underlying value.
@@ -18,7 +21,7 @@ pub(crate) enum Value {
     /// A number value in Lox
     Number(f64),
     /// A heap-allocated object
-    Object(Object),
+    Object(ObjectHandle),
 }
 
 impl PartialEq for Value {
@@ -46,6 +49,7 @@ impl ops::Add for &Value {
 
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
+            (Value::Object(o1), Value::Object(o2)) => Ok(Value::Object(o1.add(*o2)?)),
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 + n2)),
             _ => Err(ValueError::InvalidUse(
                 "Operands must be two numbers or two strings",
