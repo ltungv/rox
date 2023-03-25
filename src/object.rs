@@ -1,15 +1,52 @@
-use std::{convert::Infallible, fmt, ops, ptr::NonNull, str::FromStr};
+use std::{
+    collections::HashMap, convert::Infallible, fmt, ops, ptr::NonNull, rc::Rc, str::FromStr,
+};
 
 /// A managed heap that cleanups memory using a tracing garbage collector.
 #[derive(Debug, Default)]
 pub(crate) struct Heap {
+    intern_str: Vec<Rc<str>>,
+    intern_ids: HashMap<Rc<str>, usize>,
     head: Option<NonNull<Object>>,
 }
 
 impl Heap {
+    pub(crate) fn alloc_string(&mut self, s: String) -> ObjectHandle {
+        let content = self.take_string(s);
+        self.alloc(content)
+    }
+
+    pub(crate) fn add_objects(
+        &mut self,
+        lhs: &ObjectHandle,
+        rhs: &ObjectHandle,
+    ) -> Result<ObjectHandle, ObjectError> {
+        match (&lhs.content, &rhs.content) {
+            (ObjectContent::String(s1), ObjectContent::String(s2)) => {
+                let s1 = String::from_str(s1)?;
+                let s2 = String::from_str(s2)?;
+                let s = s1 + &s2;
+                Ok(self.alloc_string(s))
+            }
+        }
+    }
+
+    fn take_string(&mut self, s: String) -> ObjectContent {
+        match self.intern_ids.get(s.as_str()) {
+            Some(id) => ObjectContent::String(Rc::clone(&self.intern_str[*id])),
+            None => {
+                let s = Rc::from(s);
+                let intern_id = self.intern_str.len();
+                self.intern_str.push(Rc::clone(&s));
+                self.intern_ids.insert(Rc::clone(&s), intern_id);
+                ObjectContent::String(s)
+            }
+        }
+    }
+
     /// Allocates a new object and returns a handle to it. The object is pushed to the head of
     /// the list of allocated data.
-    pub(crate) fn alloc(&mut self, content: ObjectContent) -> ObjectHandle {
+    fn alloc(&mut self, content: ObjectContent) -> ObjectHandle {
         let object = Box::new(Object {
             next: self.head,
             content,
@@ -20,19 +57,13 @@ impl Heap {
     }
 
     /// Remove the object at the head of the linked list.
-    ///
-    /// # Safety
-    ///
-    /// This function moves the data out of the heap and invalidates any previous given pointer
-    /// to the current head. Callers must ensure that all previously given pointer is no longer
-    /// accessible.
-    ///
-    /// If the head of the linked list is still pointing to a Node, we know that its data has
-    /// not been dropped. So we can dereference the raw pointer and deallocate its data ourself.
     #[allow(unsafe_code)]
-    pub unsafe fn pop(&mut self) -> Option<ObjectContent> {
+    fn pop(&mut self) -> Option<ObjectContent> {
+        // SAFETY: If the object was deallocated, it must be removed from the linked list. If
+        // we still can access the object from the linked list then it must have not been
+        // deallocated.
         self.head.map(|head| {
-            let object = Box::from_raw(head.as_ptr());
+            let object = unsafe { Box::from_raw(head.as_ptr()) };
             self.head = object.next;
             object.content
         })
@@ -40,17 +71,8 @@ impl Heap {
 }
 
 impl Drop for Heap {
-    #[allow(unsafe_code)]
     fn drop(&mut self) {
-        let mut count = 0;
-        // SAFETY: Once the heap is dropped, we must ensure that all objects are no
-        // longer accessible. Thus, it's safe to free all allocated object data.
-        unsafe {
-            while self.pop().is_some() {
-                count += 1;
-            }
-        }
-        println!("Deallocated {count} objects.");
+        while self.pop().is_some() {}
     }
 }
 
@@ -74,8 +96,9 @@ impl Iterator for HeapIter {
     #[allow(unsafe_code)]
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(node) = self.next {
-            // SAFETY: If we still own a handle then we can be confident that the underlying memory
-            // is not yet freed. Thus, it's safe to get a reference from the raw pointer.
+            // SAFETY: If the object was deallocated, it must be removed from the linked list. If
+            // we still can access the object from the linked list then it must have not been
+            // deallocated.
             self.next = unsafe { node.as_ref().next };
             return Some(ObjectHandle(node));
         }
@@ -95,46 +118,25 @@ pub enum ObjectError {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ObjectHandle(NonNull<Object>);
 
-impl fmt::Display for ObjectHandle {
+impl ops::Deref for ObjectHandle {
+    type Target = Object;
+
     #[allow(unsafe_code)]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        // SAFETY: If we still own a handle then we can be confident that the underlying memory
-        // is not yet freed. Thus, it's safe to get a reference from the raw pointer.
-        let inner = unsafe { self.0.as_ref() };
-        write!(f, "{inner}")
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: If we still own a handle then the underlying must not be deallocated. Thus, it's
+        // safe to get a reference from the raw pointer.
+        unsafe { self.0.as_ref() }
     }
 }
 
 impl PartialEq for ObjectHandle {
-    #[allow(unsafe_code)]
     fn eq(&self, other: &Self) -> bool {
-        // SAFETY: If we still own a handle then we can be confident that the underlying memory
-        // is not yet freed. Thus, it's safe to get a reference from the raw pointer.
-        let (o1, o2) = unsafe { (self.0.as_ref(), other.0.as_ref()) };
-        match (&o1.content, &o2.content) {
-            (ObjectContent::String(s1), ObjectContent::String(s2)) => s1 == s2,
-        }
+        self.content.eq(&other.content)
     }
 }
-
-impl ops::Add for ObjectHandle {
-    type Output = Result<ObjectHandle, ObjectError>;
-
-    #[allow(unsafe_code)]
-    fn add(mut self, rhs: Self) -> Self::Output {
-        // SAFETY: If we still own a handle then we can be confident that the underlying memory
-        // is not yet freed. Thus, it's safe to get a reference from the raw pointer.
-        let (o1, o2) = unsafe { (self.0.as_mut(), rhs.0.as_ref()) };
-        let content = match (&o1.content, &o2.content) {
-            (ObjectContent::String(s1), ObjectContent::String(s2)) => {
-                let s1 = String::from_str(s1)?;
-                let s2 = String::from_str(s2)?;
-                let s = s1 + &s2;
-                ObjectContent::String(s.into_boxed_str())
-            }
-        };
-        let handle = o1.alloc(content);
-        Ok(handle)
+impl fmt::Display for ObjectHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(f, "{}", self.content)
     }
 }
 
@@ -144,21 +146,7 @@ pub struct Object {
     /// A pointer to the next object in the linked list of allocated objects.
     next: Option<NonNull<Object>>,
     /// The object's data.
-    content: ObjectContent,
-}
-
-impl Object {
-    /// Allocates a new object and returns a handle to it. The object is inserted after the current
-    /// object within the linked list.
-    pub(crate) fn alloc(&mut self, content: ObjectContent) -> ObjectHandle {
-        let object = Box::new(Object {
-            next: self.next,
-            content,
-        });
-        let object_ptr = NonNull::from(Box::leak(object));
-        self.next = Some(object_ptr);
-        ObjectHandle(object_ptr)
-    }
+    pub(crate) content: ObjectContent,
 }
 
 impl fmt::Display for Object {
@@ -171,7 +159,7 @@ impl fmt::Display for Object {
 #[derive(Debug, Clone)]
 pub(crate) enum ObjectContent {
     /// A heap allocated string
-    String(Box<str>),
+    String(Rc<str>),
     // /// A closure that can captured surrounding variables
     // Closure(Gc<ObjClosure>),
     // /// A function object
@@ -182,6 +170,14 @@ pub(crate) enum ObjectContent {
     // Instance(Gc<RefCell<ObjInstance>>),
     // /// A class instance
     // BoundMethod(Gc<ObjBoundMethod>),
+}
+
+impl PartialEq for ObjectContent {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ObjectContent::String(s1), ObjectContent::String(s2)) => Rc::ptr_eq(s1, s2),
+        }
+    }
 }
 
 impl fmt::Display for ObjectContent {

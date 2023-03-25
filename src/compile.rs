@@ -4,7 +4,7 @@ use std::{mem, num::ParseFloatError};
 
 use crate::{
     chunk::{disassemble_chunk, Chunk, ChunkError},
-    object::{Heap, ObjectContent},
+    object::Heap,
     opcode::Opcode,
     scan::{Kind, Line, ScanErrors, Scanner, Token},
     value::Value,
@@ -240,9 +240,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn string(&mut self) -> Result<(), CompileError> {
-        let s = String::from(self.token_prev.lexeme.trim_matches('"')).into_boxed_str();
-        let obj_content = ObjectContent::String(s);
-        let value = Value::Object(self.heap.alloc(obj_content));
+        let s = String::from(self.token_prev.lexeme.trim_matches('"'));
+        let value = Value::Object(self.heap.alloc_string(s));
         self.emit_constant(value)?;
         Ok(())
     }

@@ -56,8 +56,8 @@ impl<T: Default, const N: usize> Stack<T, N> {
         let value = {
             let mut tmp = MaybeUninit::uninit();
             mem::swap(&mut tmp, &mut self.items[self.pointer]);
-            // SAFETY: We ensure that pointer always points to initialized items. Thus the swap
-            // results in tmp containing initialized data.
+            // SAFETY: We ensure that pointer always points to initialized items. Thus, after
+            // swapping, tmp must contain initialized data.
             unsafe { tmp.assume_init() }
         };
         Ok(value)
@@ -70,10 +70,55 @@ impl<T: Default, const N: usize> Stack<T, N> {
         }
         let value = {
             let tmp = &mut self.items[self.pointer - 1];
-            // SAFETY: We ensure that pointer always points to initialized items.
+            // SAFETY: We ensure that pointer always points to initialized items. Thus, tmp
+            // must contain initialized data.
             unsafe { &mut *tmp.as_mut_ptr() }
         };
         Ok(value)
+    }
+
+    pub(crate) fn unary<F>(&mut self, func: F) -> Result<(), StackError>
+    where
+        T: Copy,
+        F: Fn(T) -> T,
+    {
+        let v = self.top_mut()?;
+        *v = func(*v);
+        Ok(())
+    }
+
+    pub(crate) fn unary_result<E, F>(&mut self, func: F) -> Result<(), E>
+    where
+        T: Copy,
+        E: From<StackError>,
+        F: Fn(T) -> Result<T, E>,
+    {
+        let v = self.top_mut()?;
+        *v = func(*v)?;
+        Ok(())
+    }
+
+    pub(crate) fn binary<F>(&mut self, func: F) -> Result<(), StackError>
+    where
+        T: Copy,
+        F: Fn(T, T) -> T,
+    {
+        let rhs = self.pop()?;
+        let lhs = self.top_mut()?;
+        *lhs = func(*lhs, rhs);
+        Ok(())
+    }
+
+    pub(crate) fn binary_result<E, F>(&mut self, mut func: F) -> Result<(), E>
+    where
+        T: Copy,
+        E: From<StackError>,
+        F: FnMut(T, T) -> Result<T, E>,
+    {
+        let rhs = self.pop()?;
+        let lhs = self.top_mut()?;
+        *lhs = func(*lhs, rhs)?;
+        Ok(())
     }
 }
 
@@ -105,6 +150,8 @@ impl<'stack, T, const N: usize> Iterator for StackIter<'stack, T, N> {
         }
         let value = {
             let tmp = &self.stack.items[self.pointer];
+            // SAFETY: We ensure that indices less than the stack pointer always point to
+            // initialized items. Thus, tmp must contain initialized data.
             unsafe { &*tmp.as_ptr() }
         };
         self.pointer += 1;

@@ -12,7 +12,7 @@ pub enum ValueError {
 }
 
 /// A enumeration of all supported primitive types in Lox and their underlying value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum Value {
     /// A nothing value in Lox
     Nil,
@@ -49,7 +49,6 @@ impl ops::Add for &Value {
 
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
-            (Value::Object(o1), Value::Object(o2)) => Ok(Value::Object(o1.add(*o2)?)),
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 + n2)),
             _ => Err(ValueError::InvalidUse(
                 "Operands must be two numbers or two strings",
