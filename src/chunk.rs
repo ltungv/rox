@@ -1,4 +1,7 @@
-use crate::{opcode::Opcode, scan::Line, stack::Stack, value::Value, vm::JumpDirection};
+use crate::{opcode::Opcode, scan::Line, stack::Stack, value::Value};
+
+#[cfg(debug_assertions)]
+use crate::vm::JumpDirection;
 
 /// A chunk holds a sequence of instructions to be executes and their data.
 #[derive(Debug, Default)]
@@ -37,6 +40,7 @@ impl Chunk {
     }
 
     /// Get the line information of the bytecode at a specific offset.
+    #[cfg(debug_assertions)]
     pub(crate) fn get_line(&self, offset: usize) -> Line {
         let mut total_run_length = 0;
         for (i, run_length) in self.line_run_lengths.iter().enumerate() {
@@ -137,6 +141,8 @@ fn disassemble_byte(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
     offset + 2
 }
 
+/// Display a jump instruction in human-readable format.
+#[cfg(debug_assertions)]
 fn disassemble_jump(chunk: &Chunk, offset: usize, dir: JumpDirection, name: &'static str) -> usize {
     let hi = chunk.instructions[offset + 1] as u16;
     let lo = chunk.instructions[offset + 2] as u16;

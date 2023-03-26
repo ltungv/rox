@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    chunk::{disassemble_chunk, disassemble_instruction, Chunk},
+    chunk::Chunk,
     compile::Parser,
     object::Heap,
     opcode::Opcode,
@@ -15,6 +15,9 @@ use crate::{
     value::{Value, ValueError},
     InterpretError,
 };
+
+#[cfg(debug_assertions)]
+use crate::chunk::{disassemble_chunk, disassemble_instruction};
 
 /// The max number of values can be put onto the virtual machine's stack.
 const VM_STACK_SIZE: usize = 256;

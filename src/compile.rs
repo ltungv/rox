@@ -1,15 +1,17 @@
 //! Implementation of the bytecode compiler for the Lox lanaguage.
 
-use std::{mem, num::ParseFloatError};
-
 use crate::{
-    chunk::{disassemble_chunk, Chunk},
+    chunk::Chunk,
     object::Heap,
     opcode::Opcode,
     scan::{Kind, Line, ScanErrors, Scanner, Token},
     stack::Stack,
     value::Value,
 };
+use std::{mem, num::ParseFloatError};
+
+#[cfg(debug_assertions)]
+use crate::chunk::disassemble_chunk;
 
 /// An enumeration of potential errors occur when compiling Lox.
 #[derive(Debug, thiserror::Error)]
