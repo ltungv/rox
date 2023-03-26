@@ -31,11 +31,12 @@ impl Chunk {
         }
     }
 
-    /// Write a constant along with an instruction to load it into the chunk.
+    /// Write a constant into the chunk.
     pub(crate) fn write_constant(&mut self, value: Value) -> Option<usize> {
         self.constants.push(value)
     }
 
+    /// Get the line information of the bytecode at a specific offset.
     pub(crate) fn get_line(&self, offset: usize) -> Line {
         let mut total_run_length = 0;
         for (i, run_length) in self.line_run_lengths.iter().enumerate() {
@@ -120,7 +121,7 @@ fn disassemble_constant(chunk: &Chunk, offset: usize, name: &'static str) -> usi
     offset + 2
 }
 
-/// Display a constant instruction in human-readable format.
+/// Display a byte instruction in human-readable format.
 #[cfg(debug_assertions)]
 fn disassemble_byte(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
     let slot = chunk.instructions[offset + 1] as usize;

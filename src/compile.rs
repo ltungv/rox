@@ -127,10 +127,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// decl       --> classDecl
     ///              | funDecl
     ///              | varDecl
     ///              | stmt ;
+    /// ```
     fn declaration(&mut self) {
         // Report and recover from errors. We try to compile until EOF to detect all potential
         // issue instead of eagerly stop as soon as there's an error.
@@ -154,6 +156,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// stmt       --> block
     ///              | exprStmt
     ///              | forStmt
@@ -161,6 +164,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///              | printStmt
     ///              | returnStmt
     ///              | whileStmt ;
+    /// ```
     fn statement(&mut self) -> Result<(), CompileError> {
         if self.advance_if(Kind::LBrace) {
             self.begin_scope();
@@ -174,6 +178,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         Ok(())
     }
 
+    /// Parse a block assuming that we've already consumed the '{' token.
+    ///
+    /// ## Grammar
+    ///
+    /// ```text
+    /// block      --> "{" decl* "}" ;
+    /// ```
     fn block(&mut self) -> Result<(), CompileError> {
         while !self.check_curr(Kind::RBrace) && !self.check_curr(Kind::Eof) {
             self.declaration();
@@ -185,7 +196,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// printStmt  --> "print" expr ";" ;
+    /// ```
     fn print_statement(&mut self) -> Result<(), CompileError> {
         self.expression()?;
         self.consume(Kind::Semicolon, "Expect ';' after value")?;
@@ -197,7 +210,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// exprStmt   --> expr ";" ;
+    /// ```
     fn expression_statement(&mut self) -> Result<(), CompileError> {
         self.expression()?;
         self.consume(Kind::Semicolon, "Expect ';' after expression")?;
@@ -209,7 +224,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// varDecl    --> "var" IDENT ( "=" expr )? ";" ;
+    /// ```
     ///
     /// ## Local variables
     ///
@@ -254,7 +271,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         Ok(())
     }
 
-    /// Parse the identifier declared as the variable name.
+    /// Parse the identifier and declare it as the variable name.
     fn parse_variable(&mut self, message: &str) -> Result<u8, CompileError> {
         self.consume(Kind::Ident, message)?;
         self.declare_variable()?;
@@ -267,17 +284,21 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.identifier_constant(self.token_prev)
     }
 
+    /// Try to declare a local variable.
     fn declare_variable(&mut self) -> Result<(), CompileError> {
         let name = self.token_prev;
         let compiler = self.compiler_mut();
         if compiler.scope_depth == 0 {
+            // Skip this step for global scope.
             return Ok(());
         }
-        for local in &compiler.locals {
+        for local in compiler.locals.into_iter().rev() {
             if local.depth != -1 && local.depth < compiler.scope_depth {
+                // Stop if we've gone through all initialized variable in the current scope.
                 break;
             }
             if local.name.lexeme == name.lexeme {
+                // Return an error if any variable in the current scope has the same name.
                 return Err(self.error_prev("Already a variable with this name in this scope"));
             }
         }
@@ -297,7 +318,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         Ok(())
     }
 
-    /// Put the name of the identifier as a string object in the list of constant.
+    /// Put an identifier as a string object in the list of constant.
     fn identifier_constant(&mut self, name: Token<'_>) -> Result<u8, CompileError> {
         let s = String::from(name.lexeme.trim_matches('"'));
         let value = Value::Object(self.heap.alloc_string(s));
@@ -306,12 +327,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Emit bytecodes for defining a global variable.
     fn define_variable(&mut self, global_id: u8) {
+        // If we are in a local scope, we don't need to emit bytecodes for loading a variable's
+        // value. We have already executed the code for the variable’s initializer (or the
+        // implicit nil), and that value is sitting right on top of the stack as the only
+        // remaining temporary.
         if self.compiler().scope_depth > 0 {
-            // If we are in a local scope, we don't need to emit bytecodes for loading a variable's
-            // value. We have already executed the code for the variable’s initializer (or the
-            // implicit nil), and that value is sitting right on top of the stack as the only
-            // remaining temporary. We also know that new locals are allocated at the top of
-            // the stack.
+            // Mark declared variable as initialized
             self.mark_initialized();
             return;
         }
@@ -319,6 +340,30 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit_byte(global_id);
     }
 
+    /// A local variable is initialized if its depth is not -1.
+    ///
+    /// ## Why?
+    ///
+    /// Consider the following code
+    ///
+    /// ```lox
+    /// {
+    ///     var a = 1;
+    ///     {
+    ///         var a = a;
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// By the time we parse the initializer part of `var a = a`, a local variable named `a` has
+    /// already been added to the list of local variable. Thus, the RHS in the assignment `var a =
+    /// a` references the variable `a` on the LHS itself. This behavior is undesirable and Lox
+    /// disallow a variable to reference itself when initializing
+    ///
+    /// This is solved by first adding an uninitialized local with `depth = -1`. While parsing the
+    /// initializer, if we encounter a uninitialized variable, we return an error. Once the full
+    /// variable declaration has been parsed, we went back to the local to set its depth to the
+    /// correct value.
     fn mark_initialized(&mut self) {
         let compiler = self.compiler_mut();
         let local = compiler
@@ -332,7 +377,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// expr       --> assign ;
+    /// ```
     fn expression(&mut self) -> Result<(), CompileError> {
         self.parse_precedence(Precedence::Assignment)
     }
@@ -342,6 +389,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// expr       --> assign ;
     /// assign     --> ( call "." )? IDENT "=" expr ";"
     ///              | or ;
@@ -359,6 +407,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///              | "this" | "super" "." IDENT
     ///              | "true" | "false" | "nil"
     ///              | "(" expr ")" ;
+    /// ```
     fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), CompileError> {
         // An expression can be a target for assignment iff it's not part of any expression that
         // has a higher precedence than assignment.
@@ -412,10 +461,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// primary    --> IDENT | NUMBER | STRING
     ///              | "this" | "super" "." IDENT
     ///              | "true" | "false" | "nil"
     ///              | "(" expr ")" ;
+    /// ```
     fn grouping(&mut self) -> Result<(), CompileError> {
         self.expression()?;
         self.consume(Kind::RParen, "Expect ')' after expression")
@@ -425,8 +476,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// unary      --> ( "!" | "-" ) unary
     ///              | call ;
+    /// ```
     fn unary(&mut self) -> Result<(), CompileError> {
         let token_kind = self.token_prev.kind;
         self.parse_precedence(Precedence::Unary)?;
@@ -443,12 +496,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// or         --> and ( "or" and )* ;
     /// and        --> equality ( "and" equality )* ;
     /// equality   --> comparison ( ( "!=" | "==" ) comparison )* ;
     /// comparison --> term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
     /// term       --> factor ( ( "-" | "+" ) factor )* ;
     /// factor     --> unary ( ( "/" | "*" ) unary )* ;
+    /// ```
     fn binary(&mut self) -> Result<(), CompileError> {
         let token_kind = self.token_prev.kind;
         self.parse_precedence(Precedence::of(token_kind).next())?;
@@ -472,10 +527,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// primary    --> IDENT | NUMBER | STRING
     ///              | "this" | "super" "." IDENT
     ///              | "true" | "false" | "nil"
     ///              | "(" expr ")" ;
+    /// ```
     fn variable(&mut self, can_assign: bool) -> Result<(), CompileError> {
         self.named_variable(self.token_prev, can_assign)?;
         Ok(())
@@ -486,6 +543,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // Get the constant that holds our identifier.
         let (arg, op_get, op_set) = match self.resolve_local(name)? {
             None => {
+                // Cannot resolve to a local variable, so we assume that the name references a
+                // global variable.
                 let id = self.identifier_constant(name)?;
                 (id, Opcode::GetGlobal, Opcode::SetGlobal)
             }
@@ -505,13 +564,17 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         Ok(())
     }
 
+    /// Find the stack index the hold the local variable with the given name.
     fn resolve_local(&mut self, name: Token<'_>) -> Result<Option<u8>, CompileError> {
         let compiler = self.compiler();
-        for (id, local) in compiler.locals.into_iter().enumerate() {
+        // Walk up from low scope to high scope.
+        for (id, local) in compiler.locals.into_iter().enumerate().rev() {
             if local.name.lexeme == name.lexeme {
                 if local.depth == -1 {
+                    // Found a variable used in its own initializer.
                     return Err(self.error_prev("Can't read local variable in its own initializer"));
                 }
+                // Found a valid value for the variable.
                 return Ok(Some(id as u8));
             }
         }
@@ -522,10 +585,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// primary    --> IDENT | NUMBER | STRING
     ///              | "this" | "super" "." IDENT
     ///              | "true" | "false" | "nil"
     ///              | "(" expr ")" ;
+    /// ```
     fn string(&mut self) -> Result<(), CompileError> {
         let s = String::from(self.token_prev.lexeme.trim_matches('"'));
         let value = Value::Object(self.heap.alloc_string(s));
@@ -537,10 +602,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// primary    --> IDENT | NUMBER | STRING
     ///              | "this" | "super" "." IDENT
     ///              | "true" | "false" | "nil"
     ///              | "(" expr ")" ;
+    /// ```
     fn number(&mut self) -> Result<(), CompileError> {
         let value = Value::Number(self.token_prev.lexeme.parse()?);
         self.emit_constant(value)
@@ -550,10 +617,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///
     /// ## Grammar
     ///
+    /// ```text
     /// primary    --> IDENT | NUMBER | STRING
     ///              | "this" | "super" "." IDENT
     ///              | "true" | "false" | "nil"
     ///              | "(" expr ")" ;
+    /// ```
     fn literal(&mut self) {
         match self.token_prev.kind {
             Kind::False => self.emit(Opcode::False),
@@ -603,17 +672,22 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         &mut self.chunk
     }
 
+    /// Start a new scope.
     fn begin_scope(&mut self) {
+        // Update the current scope.
         self.compiler_mut().scope_depth += 1;
     }
 
+    /// End the current scope
     fn end_scope(&mut self) {
+        // Update the current scope.
         self.compiler_mut().scope_depth -= 1;
-
         while let Some(local) = self.compiler().locals.top() {
+            // End once we reach the current scope.
             if local.depth <= self.compiler().scope_depth {
                 break;
             }
+            // Variables at the scope bellow get popped out of the stack.
             self.emit(Opcode::Pop);
             self.compiler_mut().locals.pop();
         }

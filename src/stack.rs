@@ -3,6 +3,7 @@ use std::{
     ops::{Index, IndexMut},
 };
 
+/// A static stack implementation.
 #[derive(Debug)]
 pub(crate) struct Stack<T, const N: usize> {
     items: [MaybeUninit<T>; N],
@@ -20,16 +21,8 @@ impl<T, const N: usize> Default for Stack<T, N> {
 }
 
 impl<T, const N: usize> Stack<T, N> {
-    /// The the current size of the stack.
-    pub(crate) fn len(&self) -> usize {
-        self.pointer
-    }
-
-    /// Push a value onto the stack.
-    ///
-    /// # Errors
-    ///
-    /// If the stack is full, return RuntimeError::StackOverflown.
+    /// Push a value onto the stack and return its index. If the stack is full, then `Option::None`
+    /// is returned, otherwise `Option::Some(index)` is returned.
     pub(crate) fn push(&mut self, value: T) -> Option<usize> {
         if self.pointer == N {
             return None;
@@ -39,11 +32,8 @@ impl<T, const N: usize> Stack<T, N> {
         Some(self.pointer - 1)
     }
 
-    /// Remove the value at the top of the stack and return it.
-    ///
-    /// # Errors
-    ///
-    /// If the stack is empty, return RuntimeError::StackExhausted.
+    /// Remove the value at the top of the stack and return it. If the stack is empty, then
+    /// `Option::None` is returned, otherwise `Option::Some<T>` is returned.
     #[allow(unsafe_code)]
     pub(crate) fn pop(&mut self) -> Option<T> {
         if self.pointer == 0 {
@@ -60,6 +50,8 @@ impl<T, const N: usize> Stack<T, N> {
         Some(value)
     }
 
+    /// Get a shared reference to the value at the top of the stack . If the stack is empty,
+    /// then `Option::None` is returned, otherwise `Option::Some<&T>` is returned.
     #[allow(unsafe_code)]
     pub(crate) fn top(&self) -> Option<&T> {
         if self.pointer == 0 {
@@ -74,6 +66,8 @@ impl<T, const N: usize> Stack<T, N> {
         Some(value)
     }
 
+    /// Get an exclusive reference to the value at the top of the stack . If the stack is empty,
+    /// then `Option::None` is returned, otherwise `Option::Some<&mut T>` is returned.
     #[allow(unsafe_code)]
     pub(crate) fn top_mut(&mut self) -> Option<&mut T> {
         if self.pointer == 0 {
@@ -95,34 +89,7 @@ impl<'stack, T, const N: usize> IntoIterator for &'stack Stack<T, N> {
     type IntoIter = StackIter<'stack, T, N>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Self::IntoIter {
-            stack: self,
-            pointer: 0,
-        }
-    }
-}
-
-pub(crate) struct StackIter<'stack, T, const N: usize> {
-    stack: &'stack Stack<T, N>,
-    pointer: usize,
-}
-
-impl<'stack, T, const N: usize> Iterator for StackIter<'stack, T, N> {
-    type Item = &'stack T;
-
-    #[allow(unsafe_code)]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pointer >= self.stack.pointer {
-            return None;
-        }
-        let value = {
-            let tmp = &self.stack.items[self.pointer];
-            // SAFETY: We ensure that indices less than the stack pointer always point to
-            // initialized items. Thus, tmp must contain initialized data.
-            unsafe { &*tmp.as_ptr() }
-        };
-        self.pointer += 1;
-        Some(value)
+        Self::IntoIter::new(self)
     }
 }
 
@@ -151,6 +118,65 @@ impl<T, const N: usize> IndexMut<usize> for Stack<T, N> {
         // SAFETY: We ensure that indices less than the stack pointer always point to
         // initialized items. Thus, tmp must contain initialized data.
         unsafe { &mut *tmp.as_mut_ptr() }
+    }
+}
+
+/// An interator through all items that are currently in the stack.
+pub(crate) struct StackIter<'stack, T, const N: usize> {
+    stack: &'stack Stack<T, N>,
+    pointer_front: usize,
+    pointer_back: usize,
+}
+
+impl<'stack, T, const N: usize> StackIter<'stack, T, N> {
+    fn new(stack: &'stack Stack<T, N>) -> Self {
+        Self {
+            stack,
+            pointer_front: 0,
+            pointer_back: stack.pointer,
+        }
+    }
+}
+
+impl<'stack, T, const N: usize> Iterator for StackIter<'stack, T, N> {
+    type Item = &'stack T;
+
+    #[allow(unsafe_code)]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pointer_front >= self.pointer_back {
+            return None;
+        }
+        let value = {
+            let tmp = &self.stack.items[self.pointer_front];
+            // SAFETY: We ensure that indices less than the stack pointer always point to
+            // initialized items. Thus, tmp must contain initialized data.
+            unsafe { &*tmp.as_ptr() }
+        };
+        self.pointer_front += 1;
+        Some(value)
+    }
+}
+
+impl<'stack, T, const N: usize> DoubleEndedIterator for StackIter<'stack, T, N> {
+    #[allow(unsafe_code)]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.pointer_back <= self.pointer_front {
+            return None;
+        }
+        self.pointer_back -= 1;
+        let value = {
+            let tmp = &self.stack.items[self.pointer_back];
+            // SAFETY: We ensure that indices less than the stack pointer always point to
+            // initialized items. Thus, tmp must contain initialized data.
+            unsafe { &*tmp.as_ptr() }
+        };
+        Some(value)
+    }
+}
+
+impl<'stack, T, const N: usize> ExactSizeIterator for StackIter<'stack, T, N> {
+    fn len(&self) -> usize {
+        self.pointer_back - self.pointer_front
     }
 }
 

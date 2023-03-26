@@ -9,7 +9,7 @@ use std::{
 use crate::{
     chunk::{disassemble_chunk, disassemble_instruction, Chunk},
     compile::Parser,
-    object::{Heap, HeapError},
+    object::Heap,
     opcode::Opcode,
     stack::Stack,
     value::{Value, ValueError},
@@ -33,10 +33,6 @@ pub enum RuntimeError {
     /// Exhausted the virtual machine's stack.
     #[error("Stack is exhausted.")]
     StackExhausted,
-
-    /// Can't use the virtual machine's heap.
-    #[error(transparent)]
-    Heap(#[from] HeapError),
 
     /// Can't perform some operations given the current operand(s).
     #[error(transparent)]
@@ -166,14 +162,14 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
         Ok(())
     }
 
-    /// Get a global variable or return a runtime error if it was not found.
+    /// Get a local variable.
     fn get_local(&mut self) -> Result<(), RuntimeError> {
         let slot = self.read_byte();
         self.stack_push(self.stack[slot.into()])?;
         Ok(())
     }
 
-    /// Get a global variable or return a runtime error if it was not found.
+    /// Set a local variable.
     fn set_local(&mut self) -> Result<(), RuntimeError> {
         let slot = self.read_byte();
         self.stack[slot.into()] = *self.stack_top()?;
@@ -204,7 +200,7 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
         Ok(())
     }
 
-    /// Declare a variable and given it some initial value.
+    /// Declare a variable with some initial value.
     fn defined_global(&mut self) -> Result<(), RuntimeError> {
         let constant = *self.read_constant();
         let global_name = constant.as_str()?;
@@ -253,13 +249,15 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
     }
 
     fn add(&mut self) -> Result<(), RuntimeError> {
+        // NOTE: This function can't use the `apply_binary*` helper because rust borrow checker
+        // disallow us from mutating the `self.heap` while calling the function. This happens
+        // because the function also holds an exclusive reference to `self`.
         let rhs = self.stack_pop()?;
         let lhs = *self.stack_top()?;
         let res = match (lhs, rhs) {
             // Operations on objects might allocate a new one.
             (Value::Object(o1), Value::Object(o2)) => {
-                let object = self.heap.add_objects(&o1, &o2)?;
-                Value::Object(object)
+                Value::Object(self.heap.add_objects(&o1, &o2))
             }
             // Non-objects can used the `ops::Add` implementation for `Value`
             _ => lhs.add(&rhs)?,
@@ -296,38 +294,46 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
         Ok(())
     }
 
+    /// Apply a unary function on the stack.
     fn apply_unary<F>(&mut self, mut func: F) -> Result<(), RuntimeError>
     where
         F: FnMut(Value) -> Value,
     {
+        // Change the top of the stack in-place without doing a pop.
         let v = self.stack_top_mut()?;
         *v = func(*v);
         Ok(())
     }
 
+    /// Apply a unary function that might return an error on the stack.
     fn apply_unary_err<F>(&mut self, mut func: F) -> Result<(), RuntimeError>
     where
         F: FnMut(Value) -> Result<Value, RuntimeError>,
     {
+        // Change the top of the stack in-place without doing a pop.
         let v = self.stack_top_mut()?;
         *v = func(*v)?;
         Ok(())
     }
 
+    /// Apply a binary function on the stack.
     fn apply_binary<F>(&mut self, mut func: F) -> Result<(), RuntimeError>
     where
         F: FnMut(Value, Value) -> Value,
     {
+        // Pop once, then change the top of the stack in-place without doing a second pop.
         let rhs = self.stack_pop()?;
         let lhs = self.stack_top_mut()?;
         *lhs = func(*lhs, rhs);
         Ok(())
     }
 
+    /// Apply a binary function that might return an error on the stack.
     fn apply_binary_err<F>(&mut self, mut func: F) -> Result<(), RuntimeError>
     where
         F: FnMut(Value, Value) -> Result<Value, RuntimeError>,
     {
+        // Pop once, then change the top of the stack in-place without doing a second pop.
         let rhs = self.stack_pop()?;
         let lhs = self.stack_top_mut()?;
         *lhs = func(*lhs, rhs)?;
