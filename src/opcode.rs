@@ -78,26 +78,28 @@ pub enum Opcode {
     Print = 27,
     /// Jump forward for n instructions
     Jump = 28,
+    /// Jump forward for n instructions if current stack top is truthy
+    JumpIfTrue = 29,
     /// Jump forward for n instructions if current stack top is falsey
-    JumpIfFalse = 29,
+    JumpIfFalse = 30,
     /// Jump backward for n instructions
-    Loop = 30,
+    Loop = 31,
     /// Make a function call
-    Call = 31,
+    Call = 32,
     /// Invoke method call directly without going though an access operation
-    Invoke = 32,
+    Invoke = 33,
     /// Invoke super call directly without going though an access operation
-    SuperInvoke = 33,
+    SuperInvoke = 34,
     /// Add a new closure
-    Closure = 34,
+    Closure = 35,
     /// Move captured value to the heap
-    CloseUpvalue = 35,
+    CloseUpvalue = 36,
     /// Return from the current function
-    Ret = 36,
+    Ret = 37,
     /// Create a class and bind it to a name
-    Class = 37,
+    Class = 38,
     /// Create a inheritance relation between two classes
-    Inherit = 38,
+    Inherit = 39,
     /// Define a method
-    Method = 39,
+    Method = 40,
 }

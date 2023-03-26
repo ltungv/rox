@@ -35,6 +35,24 @@ impl Value {
     }
 }
 
+impl Value {
+    pub(crate) fn is_truthy(&self) -> bool {
+        match self {
+            Value::Bool(b) => *b,
+            Value::Nil => false,
+            _ => true,
+        }
+    }
+
+    pub(crate) fn is_falsey(&self) -> bool {
+        match self {
+            Value::Bool(b) => !b,
+            Value::Nil => true,
+            _ => false,
+        }
+    }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -117,11 +135,7 @@ impl ops::Not for &Value {
     type Output = Value;
 
     fn not(self) -> Self::Output {
-        Value::Bool(match self {
-            Value::Bool(b) => !b,
-            Value::Nil => true,
-            _ => false,
-        })
+        Value::Bool(self.is_falsey())
     }
 }
 

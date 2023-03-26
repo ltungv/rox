@@ -108,6 +108,13 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
         byte
     }
 
+    fn read_short(&mut self) -> u16 {
+        let hi = self.chunk.instructions[self.ip] as u16;
+        let lo = self.chunk.instructions[self.ip + 1] as u16;
+        self.ip += 2;
+        hi << 8 | lo
+    }
+
     fn read_constant(&mut self) -> &Value {
         let constant_id = self.read_byte() as usize;
         &self.chunk.constants[constant_id]
@@ -155,9 +162,37 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
                 Opcode::Div => self.div()?,
                 Opcode::Not => self.not()?,
                 Opcode::Neg => self.neg()?,
+                Opcode::Jump => self.jump(JumpDirection::Forward),
+                Opcode::JumpIfTrue => self.jump_if_true()?,
+                Opcode::JumpIfFalse => self.jump_if_false()?,
+                Opcode::Loop => self.jump(JumpDirection::Backward),
                 Opcode::Ret => break,
                 _ => unreachable!(),
             }
+        }
+        Ok(())
+    }
+
+    fn jump(&mut self, direction: JumpDirection) {
+        let offset = self.read_short() as usize;
+        match direction {
+            JumpDirection::Forward => self.ip += offset,
+            JumpDirection::Backward => self.ip -= offset,
+        }
+    }
+
+    fn jump_if_true(&mut self) -> Result<(), RuntimeError> {
+        let offset = self.read_short();
+        if self.stack_top()?.is_truthy() {
+            self.ip += offset as usize;
+        }
+        Ok(())
+    }
+
+    fn jump_if_false(&mut self) -> Result<(), RuntimeError> {
+        let offset = self.read_short();
+        if self.stack_top()?.is_falsey() {
+            self.ip += offset as usize;
         }
         Ok(())
     }
@@ -373,4 +408,13 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
         }
         println!();
     }
+}
+
+/// An enumeration that determine whether to jump forward or backward along the stream of
+/// bytecode instructions.
+pub(crate) enum JumpDirection {
+    /// Jump forward.
+    Forward,
+    /// Jump backward.
+    Backward,
 }

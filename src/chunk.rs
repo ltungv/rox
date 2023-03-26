@@ -1,4 +1,4 @@
-use crate::{opcode::Opcode, scan::Line, stack::Stack, value::Value};
+use crate::{opcode::Opcode, scan::Line, stack::Stack, value::Value, vm::JumpDirection};
 
 /// A chunk holds a sequence of instructions to be executes and their data.
 #[derive(Debug, Default)]
@@ -100,6 +100,14 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::Div => disassemble_simple(offset, "OP_DIV"),
         Opcode::Not => disassemble_simple(offset, "OP_NOT"),
         Opcode::Neg => disassemble_simple(offset, "OP_NEG"),
+        Opcode::Jump => disassemble_jump(chunk, offset, JumpDirection::Forward, "OP_JUMP"),
+        Opcode::JumpIfTrue => {
+            disassemble_jump(chunk, offset, JumpDirection::Forward, "OP_JUMP_IF_TRUE")
+        }
+        Opcode::JumpIfFalse => {
+            disassemble_jump(chunk, offset, JumpDirection::Forward, "OP_JUMP_IF_FALSE")
+        }
+        Opcode::Loop => disassemble_jump(chunk, offset, JumpDirection::Backward, "OP_LOOP"),
         Opcode::Ret => disassemble_simple(offset, "OP_RET"),
         _ => unreachable!(),
     }
@@ -127,4 +135,16 @@ fn disassemble_byte(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
     let slot = chunk.instructions[offset + 1] as usize;
     println!("{name:-16} {slot:4}");
     offset + 2
+}
+
+fn disassemble_jump(chunk: &Chunk, offset: usize, dir: JumpDirection, name: &'static str) -> usize {
+    let hi = chunk.instructions[offset + 1] as u16;
+    let lo = chunk.instructions[offset + 2] as u16;
+    let jump = hi << 8 | lo;
+    let target = match dir {
+        JumpDirection::Forward => offset + 3 + jump as usize,
+        JumpDirection::Backward => offset + 3 - jump as usize,
+    };
+    println!("{name:-16} {offset:4} -> {target}");
+    offset + 3
 }

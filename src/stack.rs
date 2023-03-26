@@ -146,12 +146,7 @@ impl<'stack, T, const N: usize> Iterator for StackIter<'stack, T, N> {
         if self.pointer_front >= self.pointer_back {
             return None;
         }
-        let value = {
-            let tmp = &self.stack.items[self.pointer_front];
-            // SAFETY: We ensure that indices less than the stack pointer always point to
-            // initialized items. Thus, tmp must contain initialized data.
-            unsafe { &*tmp.as_ptr() }
-        };
+        let value = &self.stack[self.pointer_front];
         self.pointer_front += 1;
         Some(value)
     }
@@ -164,12 +159,7 @@ impl<'stack, T, const N: usize> DoubleEndedIterator for StackIter<'stack, T, N> 
             return None;
         }
         self.pointer_back -= 1;
-        let value = {
-            let tmp = &self.stack.items[self.pointer_back];
-            // SAFETY: We ensure that indices less than the stack pointer always point to
-            // initialized items. Thus, tmp must contain initialized data.
-            unsafe { &*tmp.as_ptr() }
-        };
+        let value = &self.stack[self.pointer_back];
         Some(value)
     }
 }

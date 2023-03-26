@@ -172,6 +172,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.end_scope();
         } else if self.advance_if(Kind::Print) {
             self.print_statement()?;
+        } else if self.advance_if(Kind::If) {
+            self.if_statement()?;
+        } else if self.advance_if(Kind::While) {
+            self.while_statement()?;
+        } else if self.advance_if(Kind::For) {
+            self.for_statement()?;
         } else {
             self.expression_statement()?;
         }
@@ -203,6 +209,141 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.expression()?;
         self.consume(Kind::Semicolon, "Expect ';' after value")?;
         self.emit(Opcode::Print);
+        Ok(())
+    }
+
+    /// Parse an if statement assuming that we've already consumed the 'print' keyword.
+    ///
+    /// ## Grammar
+    ///
+    /// ```text
+    /// ifStmt     --> "if" "(" expr ")" stmt ( "else" stmt )? ;
+    /// ```
+    fn if_statement(&mut self) -> Result<(), CompileError> {
+        // Conditional part.
+        self.consume(Kind::LParen, "Expect '(' after 'if'")?;
+        self.expression()?;
+        self.consume(Kind::RParen, "Expect ')' after condition")?;
+        // Jump over the then statement if condition is false.
+        let jump_skip_then = self.emit_jump(Opcode::JumpIfFalse);
+        // Pop the temporary value on stack created by the conditional expression.
+        self.emit(Opcode::Pop);
+        // Then statement.
+        self.statement()?;
+        // Jump over the else statement after finish executing the then statement.
+        let jump_skip_else = self.emit_jump(Opcode::Jump);
+        // Patch jump to skip to right before the else statement.
+        self.patch_jump(jump_skip_then)?;
+        // Pop the temporary value on stack created by the conditional expression.
+        self.emit(Opcode::Pop);
+        // Else statement.
+        if self.advance_if(Kind::Else) {
+            self.statement()?;
+        }
+        // Patch jump to skip to right after the else statement.
+        self.patch_jump(jump_skip_else)?;
+        Ok(())
+    }
+
+    /// Parse an if statement assuming that we've already consumed the 'while' keyword.
+    ///
+    /// ## Grammar
+    ///
+    /// ```text
+    /// whileStmt  --> "while" "(" expr ")" stmt ;
+    /// ```
+    fn while_statement(&mut self) -> Result<(), CompileError> {
+        // Track the start of the loop where we can jump back to.
+        let loop_start = self.chunk().instructions.len();
+        // Conditional part.
+        self.consume(Kind::LParen, "Expect '(' after 'while'")?;
+        self.expression()?;
+        self.consume(Kind::RParen, "Expect ')' after condition")?;
+        // Jump over the loop body if condition is false.
+        let jump_exit = self.emit_jump(Opcode::JumpIfFalse);
+        // Pop the temporary value on stack created by the conditional expression.
+        self.emit(Opcode::Pop);
+        // Loop body.
+        self.statement()?;
+        // Emit instructions for jumping back to the start of the loop.
+        self.emit_loop(loop_start)?;
+        // Patch jump to skip to right after the loop body.
+        self.patch_jump(jump_exit)?;
+        // Pop the temporary value on stack created by the conditional expression.
+        self.emit(Opcode::Pop);
+        Ok(())
+    }
+
+    /// Parse an if statement assuming that we've already consumed the 'for' keyword.
+    ///
+    /// ## Grammar
+    ///
+    /// ```text
+    /// forStmt    --> "for" "(" ( varDecl | exprStmt | ";" ) expr? ";" expr? ")" stmt ;
+    /// ```
+    fn for_statement(&mut self) -> Result<(), CompileError> {
+        // A for statement create its own scope.
+        self.begin_scope();
+        // Loop's initializer.
+        self.consume(Kind::LParen, "Expect '(' after 'for'")?;
+        if self.advance_if(Kind::Semicolon) {
+            // Empty initializer. Ignored.
+        } else if self.advance_if(Kind::Var) {
+            self.var_declaration()?;
+        } else {
+            self.expression_statement()?;
+        }
+        // Loop's condition.
+        let loop_start = self.chunk().instructions.len();
+        let jump_exit = if self.advance_if(Kind::Semicolon) {
+            // The conditional part is empty, so we don't have to emit a jump instruction.
+            None
+        } else {
+            // Conditional expression.
+            self.expression()?;
+            self.consume(Kind::Semicolon, "Expect ';' after loop condition")?;
+            // Jump out of the loop.
+            let jump_exit = self.emit_jump(Opcode::JumpIfFalse);
+            // Clear out the result of the expression.
+            self.emit(Opcode::Pop);
+            Some(jump_exit)
+        };
+        // Loop's incrementer.
+        let increment_start = if self.advance_if(Kind::RParen) {
+            // The increment part is empty, so we don't have to emit a jump instruction.
+            None
+        } else {
+            // If there's an incrementer, we immediately jump to the loop's body so it can be
+            // executed first.
+            let jump_to_body = self.emit_jump(Opcode::Jump);
+            // Keep track of the incrementer's starting position.
+            let increment_start = self.chunk().instructions.len();
+            // Parse expression and ignore its result at runtime.
+            self.expression()?;
+            self.emit(Opcode::Pop);
+            self.consume(Kind::RParen, "Expect ')' after for clauses")?;
+            // Jump back the the start of the loop so we can start a new iteration.
+            self.emit_loop(loop_start)?;
+            // Patch jump to right before loop's body.
+            self.patch_jump(jump_to_body)?;
+            Some(increment_start)
+        };
+        // Loop's body.
+        self.statement()?;
+        match increment_start {
+            // Jump back to the first instruction in the loop if there's no incrementer.
+            None => self.emit_loop(loop_start)?,
+            // Jump back to the incrementer so its expression can be run after the body.
+            Some(offset) => self.emit_loop(offset)?,
+        }
+        // Patch loop exit jump if we have an exit condition.
+        if let Some(jump_exit) = jump_exit {
+            self.patch_jump(jump_exit)?;
+            // Clear out the result of the expression.
+            self.emit(Opcode::Pop);
+        }
+        // End the scope one we finish with the for loop
+        self.end_scope();
         Ok(())
     }
 
@@ -369,7 +510,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let local = compiler
             .locals
             .top_mut()
-            .expect("A local varialbe should have been declared.");
+            .expect("A local varialbe should have been declared");
         local.depth = compiler.scope_depth;
     }
 
@@ -443,6 +584,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Parse an infix expression if the consumed token can be used in a infix operation.
     fn infix_rule(&mut self) -> Result<(), CompileError> {
         match self.token_prev.kind {
+            Kind::Or => self.or(),
+            Kind::And => self.and(),
             Kind::Minus
             | Kind::Plus
             | Kind::Slash
@@ -497,8 +640,6 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// ## Grammar
     ///
     /// ```text
-    /// or         --> and ( "or" and )* ;
-    /// and        --> equality ( "and" equality )* ;
     /// equality   --> comparison ( ( "!=" | "==" ) comparison )* ;
     /// comparison --> term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
     /// term       --> factor ( ( "-" | "+" ) factor )* ;
@@ -520,6 +661,44 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             Kind::Slash => self.emit(Opcode::Div),
             _ => unreachable!(),
         }
+        Ok(())
+    }
+
+    /// Parse the 'or' operator with short-circuiting.
+    ///
+    /// ## Grammar
+    ///
+    /// ```text
+    /// or         --> and ( "or" and )* ;
+    /// ```
+    fn or(&mut self) -> Result<(), CompileError> {
+        // Jump pass all right operand once the condition is true.
+        let jump_short_circuit = self.emit_jump(Opcode::JumpIfTrue);
+        // Clean up the result of the previous expression.
+        self.emit(Opcode::Pop);
+        // Parse right operand.
+        self.parse_precedence(Precedence::Or)?;
+        // Patch jump to skip to the end of the expression.
+        self.patch_jump(jump_short_circuit)?;
+        Ok(())
+    }
+
+    /// Parse the 'and' operator with short-circuiting.
+    ///
+    /// ## Grammar
+    ///
+    /// ```text
+    /// and        --> equality ( "and" equality )* ;
+    /// ```
+    fn and(&mut self) -> Result<(), CompileError> {
+        // Jump pass all right operand once the condition is false.
+        let jump_short_circuit = self.emit_jump(Opcode::JumpIfFalse);
+        // Clean up the result of the previous expression.
+        self.emit(Opcode::Pop);
+        // Parse right operand.
+        self.parse_precedence(Precedence::And)?;
+        // Patch jump to skip to the end of the expression.
+        self.patch_jump(jump_short_circuit)?;
         Ok(())
     }
 
@@ -635,15 +814,36 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Write the byte representing the given opcode into the current compiling chunk.
     fn emit(&mut self, opcode: Opcode) {
         let line = self.token_prev.line;
-        let chunk = self.chunk_mut();
-        chunk.write(opcode, line);
+        self.chunk_mut().write(opcode, line);
     }
 
     /// Write the byte into the current compiling chunk.
     fn emit_byte(&mut self, byte: u8) {
         let line = self.token_prev.line;
-        let chunk = self.chunk_mut();
-        chunk.write_byte(byte, line);
+        self.chunk_mut().write_byte(byte, line);
+    }
+
+    /// Emit a jump instruction along with a 16-byte placeholder for the offset.
+    fn emit_jump(&mut self, opcode: Opcode) -> usize {
+        self.emit(opcode);
+        self.emit_byte(0xff);
+        self.emit_byte(0xff);
+        self.chunk().instructions.len() - 2
+    }
+
+    /// Emit a loop instruction along with a 16-byte placeholder for the offset.
+    fn emit_loop(&mut self, start: usize) -> Result<(), CompileError> {
+        self.emit(Opcode::Loop);
+        // We do +2 to adjust for the 2 offset bytes.
+        let jump = self.chunk().instructions.len() - start + 2;
+        if jump > u16::MAX.into() {
+            return Err(self.error_prev("Loop body too large"));
+        }
+        let hi = (jump >> 8) & 0xff;
+        let lo = jump & 0xff;
+        self.emit_byte(hi as u8);
+        self.emit_byte(lo as u8);
+        Ok(())
     }
 
     /// Write a constant and the necessary bytecodes for loading it to
@@ -651,20 +851,36 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn emit_constant(&mut self, value: Value) -> Result<(), CompileError> {
         let constant_id = self.make_constant(value)?;
         let line = self.token_prev.line;
-        let chunk = self.chunk_mut();
-        chunk.write(Opcode::Const, line);
-        chunk.write_byte(constant_id, line);
+        self.chunk_mut().write(Opcode::Const, line);
+        self.chunk_mut().write_byte(constant_id, line);
+        Ok(())
+    }
+
+    fn patch_jump(&mut self, offset: usize) -> Result<(), CompileError> {
+        // We do -2 to adjust for the 2 offset bytes.
+        let jump = self.chunk().instructions.len() - offset - 2;
+        if jump > u16::MAX.into() {
+            return Err(self.error_prev("Too much code to jump over"));
+        }
+        let hi = (jump >> 8) & 0xff;
+        let lo = jump & 0xff;
+        self.chunk_mut().instructions[offset] = hi as u8;
+        self.chunk_mut().instructions[offset + 1] = lo as u8;
         Ok(())
     }
 
     /// Write a constant to the currently compiling chunk.
     fn make_constant(&mut self, value: Value) -> Result<u8, CompileError> {
-        let chunk = self.chunk_mut();
-        let constant_id = match chunk.write_constant(value) {
+        let constant_id = match self.chunk_mut().write_constant(value) {
             None => return Err(self.error_prev("Too many constants in one chunk")),
             Some(id) => id,
         };
         Ok(constant_id as u8)
+    }
+
+    /// Get a shared reference to the currently compiling chunk.
+    fn chunk(&self) -> &Chunk {
+        &self.chunk
     }
 
     /// Get a mutable reference to the currently compiling chunk.
