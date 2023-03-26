@@ -36,10 +36,10 @@ pub enum Opcode {
     SetLocal = 6,
     /// Get the value of a global variable
     GetGlobal = 7,
-    /// Pop the top of the stack and define a variable initialized with that value.
-    DefineGlobal = 8,
     /// Set the value of a global variable
-    SetGlobal = 9,
+    SetGlobal = 8,
+    /// Pop the top of the stack and define a variable initialized with that value.
+    DefineGlobal = 9,
     /// Get a variable through its upvalue
     GetUpvalue = 10,
     /// Set a variable through its upvalue

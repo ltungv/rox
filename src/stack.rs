@@ -1,17 +1,9 @@
-use std::mem::{self, MaybeUninit};
+use std::{
+    mem::{self, MaybeUninit},
+    ops::{Index, IndexMut},
+};
 
-/// An enumeration of potential errors occur when using the stack.
-#[derive(Debug, Eq, PartialEq, thiserror::Error)]
-pub enum StackError {
-    /// Can't pop on an empty stack.
-    #[error("Stack is exhausted.")]
-    Exhausted,
-
-    /// Can't push on a full stack.
-    #[error("Stack is overflown.")]
-    Overflown,
-}
-
+#[derive(Debug)]
 pub(crate) struct Stack<T, const N: usize> {
     items: [MaybeUninit<T>; N],
     pointer: usize,
@@ -27,19 +19,24 @@ impl<T, const N: usize> Default for Stack<T, N> {
     }
 }
 
-impl<T: Default, const N: usize> Stack<T, N> {
+impl<T, const N: usize> Stack<T, N> {
+    /// The the current size of the stack.
+    pub(crate) fn len(&self) -> usize {
+        self.pointer
+    }
+
     /// Push a value onto the stack.
     ///
     /// # Errors
     ///
     /// If the stack is full, return RuntimeError::StackOverflown.
-    pub(crate) fn push(&mut self, value: T) -> Result<(), StackError> {
+    pub(crate) fn push(&mut self, value: T) -> Option<usize> {
         if self.pointer == N {
-            return Err(StackError::Overflown);
+            return None;
         }
         self.items[self.pointer] = MaybeUninit::new(value);
         self.pointer += 1;
-        Ok(())
+        Some(self.pointer - 1)
     }
 
     /// Remove the value at the top of the stack and return it.
@@ -48,9 +45,9 @@ impl<T: Default, const N: usize> Stack<T, N> {
     ///
     /// If the stack is empty, return RuntimeError::StackExhausted.
     #[allow(unsafe_code)]
-    pub(crate) fn pop(&mut self) -> Result<T, StackError> {
+    pub(crate) fn pop(&mut self) -> Option<T> {
         if self.pointer == 0 {
-            return Err(StackError::Exhausted);
+            return None;
         }
         self.pointer -= 1;
         let value = {
@@ -60,13 +57,13 @@ impl<T: Default, const N: usize> Stack<T, N> {
             // swapping, tmp must contain initialized data.
             unsafe { tmp.assume_init() }
         };
-        Ok(value)
+        Some(value)
     }
 
     #[allow(unsafe_code)]
-    pub(crate) fn top(&self) -> Result<&T, StackError> {
+    pub(crate) fn top(&self) -> Option<&T> {
         if self.pointer == 0 {
-            return Err(StackError::Exhausted);
+            return None;
         }
         let value = {
             let tmp = &self.items[self.pointer - 1];
@@ -74,13 +71,13 @@ impl<T: Default, const N: usize> Stack<T, N> {
             // must contain initialized data.
             unsafe { &*tmp.as_ptr() }
         };
-        Ok(value)
+        Some(value)
     }
 
     #[allow(unsafe_code)]
-    pub(crate) fn top_mut(&mut self) -> Result<&mut T, StackError> {
+    pub(crate) fn top_mut(&mut self) -> Option<&mut T> {
         if self.pointer == 0 {
-            return Err(StackError::Exhausted);
+            return None;
         }
         let value = {
             let tmp = &mut self.items[self.pointer - 1];
@@ -88,30 +85,7 @@ impl<T: Default, const N: usize> Stack<T, N> {
             // must contain initialized data.
             unsafe { &mut *tmp.as_mut_ptr() }
         };
-        Ok(value)
-    }
-
-    pub(crate) fn apply_unary<E, F>(&mut self, mut func: F) -> Result<(), E>
-    where
-        T: Copy,
-        E: From<StackError>,
-        F: FnMut(T) -> Result<T, E>,
-    {
-        let v = self.top_mut()?;
-        *v = func(*v)?;
-        Ok(())
-    }
-
-    pub(crate) fn apply_binary<E, F>(&mut self, mut func: F) -> Result<(), E>
-    where
-        T: Copy,
-        E: From<StackError>,
-        F: FnMut(T, T) -> Result<T, E>,
-    {
-        let rhs = self.pop()?;
-        let lhs = self.top_mut()?;
-        *lhs = func(*lhs, rhs)?;
-        Ok(())
+        Some(value)
     }
 }
 
@@ -152,9 +126,37 @@ impl<'stack, T, const N: usize> Iterator for StackIter<'stack, T, N> {
     }
 }
 
+impl<T, const N: usize> Index<usize> for Stack<T, N> {
+    type Output = T;
+
+    #[allow(unsafe_code)]
+    fn index(&self, index: usize) -> &Self::Output {
+        if index >= self.pointer {
+            panic!("Index is out-of-bound.");
+        }
+        let tmp = &self.items[index];
+        // SAFETY: We ensure that indices less than the stack pointer always point to
+        // initialized items. Thus, tmp must contain initialized data.
+        unsafe { &*tmp.as_ptr() }
+    }
+}
+
+impl<T, const N: usize> IndexMut<usize> for Stack<T, N> {
+    #[allow(unsafe_code)]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        if index >= self.pointer {
+            panic!("Index is out-of-bound.");
+        }
+        let tmp = &mut self.items[index];
+        // SAFETY: We ensure that indices less than the stack pointer always point to
+        // initialized items. Thus, tmp must contain initialized data.
+        unsafe { &mut *tmp.as_mut_ptr() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Stack, StackError};
+    use super::Stack;
 
     const DEFAULT_STACK_SIZE: usize = 256;
 
@@ -203,10 +205,7 @@ mod tests {
     #[test]
     fn stack_exhausted_error_is_returned() {
         let mut stack = Stack::<usize, DEFAULT_STACK_SIZE>::default();
-        match stack.pop() {
-            Ok(_) => unreachable!(),
-            Err(err) => assert_eq!(StackError::Exhausted, err),
-        }
+        assert_eq!(None, stack.pop());
     }
 
     #[test]
@@ -215,9 +214,6 @@ mod tests {
         for i in 0..DEFAULT_STACK_SIZE {
             stack.push(i).unwrap();
         }
-        match stack.push(DEFAULT_STACK_SIZE) {
-            Ok(()) => unreachable!(),
-            Err(err) => assert_eq!(StackError::Overflown, err),
-        }
+        assert_eq!(None, stack.push(DEFAULT_STACK_SIZE));
     }
 }

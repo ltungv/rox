@@ -1,17 +1,9 @@
-use crate::{opcode::Opcode, scan::Line, value::Value};
-
-/// An enumeration of potential errors occur when compiling Lox.
-#[derive(Debug, thiserror::Error)]
-pub enum ChunkError {
-    /// Can't add more constant to the chunk.
-    #[error("Too many constants in one chunk.")]
-    ConstantLimitExceeded,
-}
+use crate::{opcode::Opcode, scan::Line, stack::Stack, value::Value};
 
 /// A chunk holds a sequence of instructions to be executes and their data.
 #[derive(Debug, Default)]
 pub(crate) struct Chunk {
-    pub(crate) constants: Vec<Value>,
+    pub(crate) constants: Stack<Value, { u8::MAX as usize + 1 }>,
     pub(crate) instructions: Vec<u8>,
     pub(crate) lines: Vec<Line>,
     pub(crate) line_run_lengths: Vec<usize>,
@@ -40,13 +32,8 @@ impl Chunk {
     }
 
     /// Write a constant along with an instruction to load it into the chunk.
-    pub(crate) fn write_constant(&mut self, value: Value) -> Result<u8, ChunkError> {
-        let constant_id = self.constants.len();
-        if constant_id >= u8::MAX.into() {
-            return Err(ChunkError::ConstantLimitExceeded);
-        }
-        self.constants.push(value);
-        Ok(constant_id as u8)
+    pub(crate) fn write_constant(&mut self, value: Value) -> Option<usize> {
+        self.constants.push(value)
     }
 
     pub(crate) fn get_line(&self, offset: usize) -> Line {
@@ -94,9 +81,11 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::True => disassemble_simple(offset, "OP_TRUE"),
         Opcode::False => disassemble_simple(offset, "OP_FALSE"),
         Opcode::Pop => disassemble_simple(offset, "OP_POP"),
+        Opcode::GetLocal => disassemble_byte(chunk, offset, "OP_GET_LOCAL"),
+        Opcode::SetLocal => disassemble_byte(chunk, offset, "OP_SET_LOCAL"),
         Opcode::GetGlobal => disassemble_constant(chunk, offset, "OP_GET_GLOBAL"),
-        Opcode::DefineGlobal => disassemble_constant(chunk, offset, "OP_DEFINE_GLOBAL"),
         Opcode::SetGlobal => disassemble_constant(chunk, offset, "OP_SET_GLOBAL"),
+        Opcode::DefineGlobal => disassemble_constant(chunk, offset, "OP_DEFINE_GLOBAL"),
         Opcode::Print => disassemble_simple(offset, "OP_PRINT"),
         Opcode::NE => disassemble_simple(offset, "OP_NE"),
         Opcode::EQ => disassemble_simple(offset, "OP_EQ"),
@@ -128,5 +117,13 @@ fn disassemble_constant(chunk: &Chunk, offset: usize, name: &'static str) -> usi
     let constant_id = chunk.instructions[offset + 1] as usize;
     let constant = &chunk.constants[constant_id];
     println!("{name:-16} {constant_id:4} {constant}");
+    offset + 2
+}
+
+/// Display a constant instruction in human-readable format.
+#[cfg(debug_assertions)]
+fn disassemble_byte(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
+    let slot = chunk.instructions[offset + 1] as usize;
+    println!("{name:-16} {slot:4}");
     offset + 2
 }
