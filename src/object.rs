@@ -61,7 +61,7 @@ pub(crate) enum ObjectContent {
     // /// A closure that can captured surrounding variables
     // Closure(Gc<ObjClosure>),
     // /// A function object
-    Fun(ObjFun),
+    Fun(RefCell<ObjFun>),
     // /// A class object
     // Class(Gc<RefCell<ObjClass>>),
     // /// A class instance
@@ -78,7 +78,7 @@ impl ObjectContent {
         }
     }
 
-    pub(crate) fn as_fun(&self) -> Result<&ObjFun, ObjectError> {
+    pub(crate) fn as_fun(&self) -> Result<&RefCell<ObjFun>, ObjectError> {
         match self {
             Self::Fun(f) => Ok(f),
             _ => Err(ObjectError::InvalidCast),
@@ -91,7 +91,7 @@ impl fmt::Display for ObjectContent {
         match self {
             Self::String(s) => write!(f, "{s}"),
             // Self::Closure(c) => write!(f, "{c}"),
-            Self::Fun(fun) => write!(f, "{fun}"),
+            Self::Fun(fun) => write!(f, "{}", fun.borrow()),
             // Self::Class(c) => write!(f, "{}", c.borrow()),
             // Self::Instance(i) => write!(f, "{}", i.borrow()),
             // Self::BoundMethod(m) => write!(f, "{m}"),
@@ -106,7 +106,17 @@ pub struct ObjFun {
     /// Number of parameters the function has
     pub(crate) arity: u8,
     /// The bytecode chunk of this function
-    pub(crate) chunk: RefCell<Chunk>,
+    pub(crate) chunk: Chunk,
+}
+
+impl ObjFun {
+    pub(crate) fn with_name(name: Rc<str>) -> Self {
+        Self {
+            name: Some(name),
+            arity: 0,
+            chunk: Chunk::default(),
+        }
+    }
 }
 
 impl fmt::Display for ObjFun {

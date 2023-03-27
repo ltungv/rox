@@ -1,7 +1,6 @@
 //! Implementation of the bytecode compiler for the Lox lanaguage.
 
 use crate::{
-    chunk::Chunk,
     heap::Heap,
     object::{ObjFun, ObjectRef},
     opcode::Opcode,
@@ -9,13 +8,12 @@ use crate::{
     stack::Stack,
     value::Value,
 };
-use std::{
-    cell::{Ref, RefMut},
-    num::ParseFloatError,
-};
+use std::{cell::RefCell, num::ParseFloatError};
 
 #[cfg(debug_assertions)]
 use crate::chunk::disassemble_chunk;
+
+const MAX_PARAMS: usize = 256;
 
 /// An enumeration of potential errors occur when compiling Lox.
 #[derive(Debug, thiserror::Error)]
@@ -87,7 +85,7 @@ pub(crate) struct Parser<'src, 'vm> {
     /// The scanner for turning source bytes into tokens.
     scanner: Scanner<'src>,
     /// The compiler's state for tracking scopes.
-    compiler: Compiler<'src>,
+    compilers: Vec<Compiler<'src>>,
     /// The heap of the currently running virtual machine.
     heap: &'vm mut Heap,
 }
@@ -101,7 +99,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             token_prev: Token::placeholder(),
             token_curr: Token::placeholder(),
             scanner: Scanner::new(src),
-            compiler: Compiler::new(fun, FunctionType::Script),
+            compilers: vec![Compiler::new(fun, FunctionType::Script)],
             heap,
         }
     }
@@ -118,10 +116,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                     .content
                     .as_fun()
                     .expect("Expect function object.");
-                let chunk = fun.chunk.borrow();
-                match &fun.name {
-                    None => disassemble_chunk(&chunk, "code"),
-                    Some(s) => disassemble_chunk(&chunk, s),
+                match &fun.borrow().name {
+                    None => disassemble_chunk(&fun.borrow().chunk, "code"),
+                    Some(s) => disassemble_chunk(&fun.borrow().chunk, s),
                 };
             }
             return None;
@@ -160,10 +157,229 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn declaration_unsync(&mut self) -> Result<(), CompileError> {
         if self.advance_if(Kind::Var) {
             self.var_declaration()?;
+        } else if self.advance_if(Kind::Fun) {
+            self.fun_declaration()?;
         } else {
             self.statement()?;
         }
         Ok(())
+    }
+
+    /// Parse a variable declaration assuming that we've already consumed the 'var' keyword.
+    ///
+    /// ## Grammar
+    ///
+    /// ```text
+    /// varDecl    --> "var" IDENT ( "=" expr )? ";" ;
+    /// ```
+    ///
+    /// ## Local variables
+    ///
+    /// Lox uses lexical scoping so the compiler knows where it is within the stack while parsing the
+    /// source code. We are simulating the virtual machine's stack so at runtime we can pre-allocate
+    /// the needed space on to the stack, and access locals through array index for better performance.
+    ///
+    /// ## Locals Stack
+    ///
+    /// ```text
+    /// {
+    ///     var a = 1;             // STACK: [ 1 ]
+    ///     {
+    ///         var b = 2;         // STACK: [ 1 ] [ 2 ]
+    ///         {
+    ///             var c = 3;     // STACK: [ 1 ] [ 2 ] [ 3 ]
+    ///             {
+    ///                 var d = 4; // STACK: [ 1 ] [ 2 ] [ 3 ] [ 4 ]
+    ///             }              // STACK: [ 1 ] [ 2 ] [ 3 ] [ x ]
+    ///
+    ///             var e = 5;     // STACK: [ 1 ] [ 2 ] [ 3 ] [ 5 ]
+    ///         }                  // STACK: [ 1 ] [ 2 ] [ x ] [ x ]
+    ///     }                      // STACK: [ 1 ] [ x ]
+    ///
+    ///     var f = 6;             // STACK: [ 1 ] [ 6 ]
+    ///     {
+    ///         var g = 7;         // STACK: [ 1 ] [ 6 ] [ 7 ]
+    ///     }                      // STACK: [ 1 ] [ 6 ] [ x ]
+    /// }                          // STACK: [ x ] [ x ]
+    /// ```
+    fn var_declaration(&mut self) -> Result<(), CompileError> {
+        let global_id = self.parse_variable("Expect variable name")?;
+        if self.advance_if(Kind::Equal) {
+            // Parse the initial value assigned to the variable.
+            self.expression()?;
+        } else {
+            // Emit bytecodes for setting the value to 'nil' if no initial expression was found.
+            self.emit(Opcode::Nil);
+        }
+        self.consume(Kind::Semicolon, "Expect ';' after variable declaration")?;
+        self.define_variable(global_id);
+        Ok(())
+    }
+
+    /// Parse a variable declaration assuming that we've already consumed the 'fun' keyword.
+    ///
+    /// ## Grammar
+    ///
+    /// ```text
+    /// funDecl    --> "fun" function ;
+    /// ```
+    fn fun_declaration(&mut self) -> Result<(), CompileError> {
+        let fun_name_const = self.parse_variable("Expect function name")?;
+        // Unlike variable, function can refer to its own name when its definition. Thus, we mark
+        // the function as initialized right after when it's created.
+        self.mark_initialized();
+        self.function(FunctionType::Function)?;
+        self.define_variable(fun_name_const);
+        Ok(())
+    }
+
+    /// Parse a function block assuming that we've already consumed its name.
+    ///
+    /// ## Grammar
+    ///
+    /// ```text
+    /// function   --> IDENT "(" params? ")" block ;
+    /// ```
+    fn function(&mut self, fun_type: FunctionType) -> Result<(), CompileError> {
+        let fun_name = self.heap.take_string(String::from(self.token_prev.lexeme));
+        let fun = self.heap.alloc_fun(ObjFun::with_name(fun_name));
+        self.compilers.push(Compiler::new(fun, fun_type));
+
+        self.begin_scope();
+        self.consume(Kind::LParen, "Expect '(' after function name")?;
+        if !self.check_curr(Kind::RParen) {
+            loop {
+                let fun = fun.content.as_fun().expect("Expect function object");
+                if fun.borrow().arity as usize == MAX_PARAMS {
+                    return Err(self.error_curr("Can't have more than 255 parameters"));
+                }
+
+                fun.borrow_mut().arity += 1;
+                let ident_id = self.parse_variable("Expect parameter name")?;
+                self.define_variable(ident_id);
+
+                if !self.advance_if(Kind::Comma) {
+                    break;
+                }
+            }
+        }
+        self.consume(Kind::RParen, "Expect ')' after parameters")?;
+        self.consume(Kind::LBrace, "Expect '{' before function body")?;
+        self.block()?;
+
+        let compiler = self.compilers.pop().expect("Invalid state.");
+        self.emit(Opcode::Const);
+        self.emit_constant(Value::Object(compiler.fun))?;
+        Ok(())
+    }
+
+    /// Parse the identifier and declare it as the variable name.
+    fn parse_variable(&mut self, message: &str) -> Result<u8, CompileError> {
+        self.consume(Kind::Ident, message)?;
+        self.declare_variable()?;
+        if self.compiler().scope_depth > 0 {
+            // Return a dummy constant id if we're in a local scope. Local variable don't
+            // need to store their names as constants because we access them at runtime
+            // through the stack index.
+            return Ok(0);
+        }
+        self.identifier_constant(self.token_prev)
+    }
+
+    /// Try to declare a local variable.
+    fn declare_variable(&mut self) -> Result<(), CompileError> {
+        let name = self.token_prev;
+        let compiler = self.compiler_mut();
+        if compiler.scope_depth == 0 {
+            // Skip this step for global scope.
+            return Ok(());
+        }
+        for local in compiler.locals.into_iter().rev() {
+            if local.depth != -1 && local.depth < compiler.scope_depth {
+                // Stop if we've gone through all initialized variable in the current scope.
+                break;
+            }
+            if local.name == name.lexeme {
+                // Return an error if any variable in the current scope has the same name.
+                return Err(self.error_prev("Already a variable with this name in this scope"));
+            }
+        }
+        self.add_local(name)
+    }
+
+    fn add_local(&mut self, name: Token<'src>) -> Result<(), CompileError> {
+        let compiler = self.compiler_mut();
+        // When a local variable is first declared, it is marked as "uninitialized" by setting
+        // depth=-1. Once we finish parsing the variable initializer, we set depth back to its
+        // correct scope depth.
+        let local = Local {
+            name: name.lexeme,
+            depth: -1,
+        };
+        compiler
+            .locals
+            .push(local)
+            .ok_or_else(|| self.error_prev("Too many local variables in function"))?;
+        Ok(())
+    }
+
+    /// Put an identifier as a string object in the list of constant.
+    fn identifier_constant(&mut self, name: Token<'_>) -> Result<u8, CompileError> {
+        let s = String::from(name.lexeme.trim_matches('"'));
+        let value = Value::Object(self.heap.alloc_string(s));
+        self.make_constant(value)
+    }
+
+    /// Emit bytecodes for defining a global variable.
+    fn define_variable(&mut self, global_id: u8) {
+        // If we are in a local scope, we don't need to emit bytecodes for loading a variable's
+        // value. We have already executed the code for the variable’s initializer (or the
+        // implicit nil), and that value is sitting right on top of the stack as the only
+        // remaining temporary.
+        if self.compiler().scope_depth > 0 {
+            // Mark declared variable as initialized
+            self.mark_initialized();
+            return;
+        }
+        self.emit(Opcode::DefineGlobal);
+        self.emit_byte(global_id);
+    }
+
+    /// A local variable is initialized if its depth is not -1.
+    ///
+    /// ## Why?
+    ///
+    /// Consider the following code
+    ///
+    /// ```lox
+    /// {
+    ///     var a = 1;
+    ///     {
+    ///         var a = a;
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// By the time we parse the initializer part of `var a = a`, a local variable named `a` has
+    /// already been added to the list of local variable. Thus, the RHS in the assignment `var a =
+    /// a` references the variable `a` on the LHS itself. This behavior is undesirable and Lox
+    /// disallow a variable to reference itself when initializing
+    ///
+    /// This is solved by first adding an uninitialized local with `depth = -1`. While parsing the
+    /// initializer, if we encounter a uninitialized variable, we return an error. Once the full
+    /// variable declaration has been parsed, we went back to the local to set its depth to the
+    /// correct value.
+    fn mark_initialized(&mut self) {
+        let compiler = self.compiler_mut();
+        if compiler.scope_depth == 0 {
+            // Do nothing if we are in the global scope.
+            return;
+        }
+        let local = compiler
+            .locals
+            .top_mut()
+            .expect("A local varialbe should have been declared");
+        local.depth = compiler.scope_depth;
     }
 
     /// Parse a statement assuming that we're at the start of it. All lines of code must be
@@ -269,7 +485,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// ```
     fn while_statement(&mut self) -> Result<(), CompileError> {
         // Track the start of the loop where we can jump back to.
-        let loop_start = self.chunk().instructions.len();
+        let loop_start = self.fun().borrow().chunk.instructions.len();
         // Conditional part.
         self.consume(Kind::LParen, "Expect '(' after 'while'")?;
         self.expression()?;
@@ -309,7 +525,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.expression_statement()?;
         }
         // Loop's condition.
-        let loop_start = self.chunk().instructions.len();
+        let loop_start = self.fun().borrow().chunk.instructions.len();
         let jump_exit = if self.advance_if(Kind::Semicolon) {
             // The conditional part is empty, so we don't have to emit a jump instruction.
             None
@@ -332,7 +548,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             // executed first.
             let jump_to_body = self.emit_jump(Opcode::Jump);
             // Keep track of the incrementer's starting position.
-            let increment_start = self.chunk().instructions.len();
+            let increment_start = self.fun().borrow().chunk.instructions.len();
             // Parse expression and ignore its result at runtime.
             self.expression()?;
             self.emit(Opcode::Pop);
@@ -374,162 +590,6 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.consume(Kind::Semicolon, "Expect ';' after expression")?;
         self.emit(Opcode::Pop);
         Ok(())
-    }
-
-    /// Parse a variable declaration assuming that we've already consumed the 'var' keyword.
-    ///
-    /// ## Grammar
-    ///
-    /// ```text
-    /// varDecl    --> "var" IDENT ( "=" expr )? ";" ;
-    /// ```
-    ///
-    /// ## Local variables
-    ///
-    /// Lox uses lexical scoping so the compiler knows where it is within the stack while parsing the
-    /// source code. We are simulating the virtual machine's stack so at runtime we can pre-allocate
-    /// the needed space on to the stack, and access locals through array index for better performance.
-    ///
-    /// ## Locals Stack
-    ///
-    /// ```text
-    /// {
-    ///     var a = 1;             // STACK: [ 1 ]
-    ///     {
-    ///         var b = 2;         // STACK: [ 1 ] [ 2 ]
-    ///         {
-    ///             var c = 3;     // STACK: [ 1 ] [ 2 ] [ 3 ]
-    ///             {
-    ///                 var d = 4; // STACK: [ 1 ] [ 2 ] [ 3 ] [ 4 ]
-    ///             }              // STACK: [ 1 ] [ 2 ] [ 3 ] [ x ]
-    ///
-    ///             var e = 5;     // STACK: [ 1 ] [ 2 ] [ 3 ] [ 5 ]
-    ///         }                  // STACK: [ 1 ] [ 2 ] [ x ] [ x ]
-    ///     }                      // STACK: [ 1 ] [ x ]
-    ///
-    ///     var f = 6;             // STACK: [ 1 ] [ 6 ]
-    ///     {
-    ///         var g = 7;         // STACK: [ 1 ] [ 6 ] [ 7 ]
-    ///     }                      // STACK: [ 1 ] [ 6 ] [ x ]
-    /// }                          // STACK: [ x ] [ x ]
-    /// ```
-    fn var_declaration(&mut self) -> Result<(), CompileError> {
-        let global_id = self.parse_variable("Expect variable name")?;
-        if self.advance_if(Kind::Equal) {
-            // Parse the initial value assigned to the variable.
-            self.expression()?;
-        } else {
-            // Emit bytecodes for setting the value to 'nil' if no initial expression was found.
-            self.emit(Opcode::Nil);
-        }
-        self.consume(Kind::Semicolon, "Expect ';' after variable declaration")?;
-        self.define_variable(global_id);
-        Ok(())
-    }
-
-    /// Parse the identifier and declare it as the variable name.
-    fn parse_variable(&mut self, message: &str) -> Result<u8, CompileError> {
-        self.consume(Kind::Ident, message)?;
-        self.declare_variable()?;
-        if self.compiler().scope_depth > 0 {
-            // Return a dummy constant id if we're in a local scope. Local variable don't
-            // need to store their names as constants because we access them at runtime
-            // through the stack index.
-            return Ok(0);
-        }
-        self.identifier_constant(self.token_prev)
-    }
-
-    /// Try to declare a local variable.
-    fn declare_variable(&mut self) -> Result<(), CompileError> {
-        let name = self.token_prev;
-        let compiler = self.compiler_mut();
-        if compiler.scope_depth == 0 {
-            // Skip this step for global scope.
-            return Ok(());
-        }
-        for local in compiler.locals.into_iter().rev() {
-            if local.depth != -1 && local.depth < compiler.scope_depth {
-                // Stop if we've gone through all initialized variable in the current scope.
-                break;
-            }
-            if local.name == name.lexeme {
-                // Return an error if any variable in the current scope has the same name.
-                return Err(self.error_prev("Already a variable with this name in this scope"));
-            }
-        }
-        self.add_local(name)
-    }
-
-    fn add_local(&mut self, name: Token<'src>) -> Result<(), CompileError> {
-        let compiler = self.compiler_mut();
-        // When a local variable is first declared, it is marked as "uninitialized" by setting
-        // depth=-1. Once we finish parsing the variable initializer, we set depth back to its
-        // correct scope depth.
-        let local = Local {
-            name: name.lexeme,
-            depth: -1,
-        };
-        compiler
-            .locals
-            .push(local)
-            .ok_or_else(|| self.error_prev("Too many local variables in function"))?;
-        Ok(())
-    }
-
-    /// Put an identifier as a string object in the list of constant.
-    fn identifier_constant(&mut self, name: Token<'_>) -> Result<u8, CompileError> {
-        let s = String::from(name.lexeme.trim_matches('"'));
-        let value = Value::Object(self.heap.alloc_string(s));
-        self.make_constant(value)
-    }
-
-    /// Emit bytecodes for defining a global variable.
-    fn define_variable(&mut self, global_id: u8) {
-        // If we are in a local scope, we don't need to emit bytecodes for loading a variable's
-        // value. We have already executed the code for the variable’s initializer (or the
-        // implicit nil), and that value is sitting right on top of the stack as the only
-        // remaining temporary.
-        if self.compiler().scope_depth > 0 {
-            // Mark declared variable as initialized
-            self.mark_initialized();
-            return;
-        }
-        self.emit(Opcode::DefineGlobal);
-        self.emit_byte(global_id);
-    }
-
-    /// A local variable is initialized if its depth is not -1.
-    ///
-    /// ## Why?
-    ///
-    /// Consider the following code
-    ///
-    /// ```lox
-    /// {
-    ///     var a = 1;
-    ///     {
-    ///         var a = a;
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// By the time we parse the initializer part of `var a = a`, a local variable named `a` has
-    /// already been added to the list of local variable. Thus, the RHS in the assignment `var a =
-    /// a` references the variable `a` on the LHS itself. This behavior is undesirable and Lox
-    /// disallow a variable to reference itself when initializing
-    ///
-    /// This is solved by first adding an uninitialized local with `depth = -1`. While parsing the
-    /// initializer, if we encounter a uninitialized variable, we return an error. Once the full
-    /// variable declaration has been parsed, we went back to the local to set its depth to the
-    /// correct value.
-    fn mark_initialized(&mut self) {
-        let compiler = self.compiler_mut();
-        let local = compiler
-            .locals
-            .top_mut()
-            .expect("A local varialbe should have been declared");
-        local.depth = compiler.scope_depth;
     }
 
     /// Parse an expression assuming that we're at the start of it.
@@ -832,13 +892,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Write the byte representing the given opcode into the current compiling chunk.
     fn emit(&mut self, opcode: Opcode) {
         let line = self.token_prev.line;
-        self.chunk_mut().write(opcode, line);
+        self.fun().borrow_mut().chunk.write(opcode, line);
     }
 
     /// Write the byte into the current compiling chunk.
     fn emit_byte(&mut self, byte: u8) {
         let line = self.token_prev.line;
-        self.chunk_mut().write_byte(byte, line);
+        self.fun().borrow_mut().chunk.write_byte(byte, line);
     }
 
     /// Emit a jump instruction along with a 16-byte placeholder for the offset.
@@ -846,14 +906,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit(opcode);
         self.emit_byte(0xff);
         self.emit_byte(0xff);
-        self.chunk().instructions.len() - 2
+        self.fun().borrow().chunk.instructions.len() - 2
     }
 
     /// Emit a loop instruction along with a 16-byte placeholder for the offset.
     fn emit_loop(&mut self, start: usize) -> Result<(), CompileError> {
         self.emit(Opcode::Loop);
         // We do +2 to adjust for the 2 offset bytes.
-        let jump = self.chunk().instructions.len() - start + 2;
+        let jump = self.fun().borrow().chunk.instructions.len() - start + 2;
         if jump > u16::MAX.into() {
             return Err(self.error_prev("Loop body too large"));
         }
@@ -869,53 +929,39 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn emit_constant(&mut self, value: Value) -> Result<(), CompileError> {
         let constant_id = self.make_constant(value)?;
         let line = self.token_prev.line;
-        self.chunk_mut().write(Opcode::Const, line);
-        self.chunk_mut().write_byte(constant_id, line);
+        self.fun().borrow_mut().chunk.write(Opcode::Const, line);
+        self.fun().borrow_mut().chunk.write_byte(constant_id, line);
         Ok(())
     }
 
     fn patch_jump(&mut self, offset: usize) -> Result<(), CompileError> {
         // We do -2 to adjust for the 2 offset bytes.
-        let jump = self.chunk().instructions.len() - offset - 2;
+        let jump = self.fun().borrow().chunk.instructions.len() - offset - 2;
         if jump > u16::MAX.into() {
             return Err(self.error_prev("Too much code to jump over"));
         }
         let hi = (jump >> 8) & 0xff;
         let lo = jump & 0xff;
-        self.chunk_mut().instructions[offset] = hi as u8;
-        self.chunk_mut().instructions[offset + 1] = lo as u8;
+        self.fun().borrow_mut().chunk.instructions[offset] = hi as u8;
+        self.fun().borrow_mut().chunk.instructions[offset + 1] = lo as u8;
         Ok(())
     }
 
     /// Write a constant to the currently compiling chunk.
     fn make_constant(&mut self, value: Value) -> Result<u8, CompileError> {
-        let constant_id = self.chunk_mut().write_constant(value);
+        let constant_id = self.fun().borrow_mut().chunk.write_constant(value);
         match constant_id {
             None => Err(self.error_prev("Too many constants in one chunk")),
             Some(id) => Ok(id as u8),
         }
     }
 
-    /// Get a shared reference to the currently compiling chunk.
-    fn chunk(&self) -> Ref<'_, Chunk> {
-        let fun = self
-            .compiler()
+    fn fun(&self) -> &RefCell<ObjFun> {
+        self.compiler()
             .fun
             .content
             .as_fun()
-            .expect("Expect function object.");
-        fun.chunk.borrow()
-    }
-
-    /// Get a mutable reference to the currently compiling chunk.
-    fn chunk_mut(&mut self) -> RefMut<'_, Chunk> {
-        let fun = self
-            .compiler()
-            .fun
-            .content
-            .as_fun()
-            .expect("Expect function object.");
-        fun.chunk.borrow_mut()
+            .expect("Expect function object.")
     }
 
     /// Start a new scope.
@@ -940,11 +986,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn compiler(&self) -> &Compiler<'src> {
-        &self.compiler
+        self.compilers.last().expect("Expect a compiler.")
     }
 
     fn compiler_mut(&mut self) -> &mut Compiler<'src> {
-        &mut self.compiler
+        self.compilers.last_mut().expect("Expect a compiler.")
     }
 
     /// Synchronize the parser to a normal state where we can continue parsing

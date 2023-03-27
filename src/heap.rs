@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ptr::NonNull, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, ptr::NonNull, rc::Rc};
 
 use crate::object::{ObjFun, Object, ObjectContent, ObjectRef};
 
@@ -14,24 +14,24 @@ impl Heap {
     /// Allocates a new string object using the content of the input string.
     pub(crate) fn alloc_string(&mut self, s: String) -> ObjectRef {
         let content = self.take_string(s);
-        self.alloc(content)
+        self.alloc(ObjectContent::String(content))
     }
 
     /// Allocates a new string object using the content of the input string.
     pub(crate) fn alloc_fun(&mut self, fun: ObjFun) -> ObjectRef {
-        self.alloc(ObjectContent::Fun(fun))
+        self.alloc(ObjectContent::Fun(RefCell::new(fun)))
     }
 
     /// Interned a string and return the object's content holding the reference.
-    fn take_string(&mut self, s: String) -> ObjectContent {
+    pub(crate) fn take_string(&mut self, s: String) -> Rc<str> {
         match self.intern_ids.get(s.as_str()) {
-            Some(id) => ObjectContent::String(Rc::clone(&self.intern_str[*id])),
+            Some(id) => Rc::clone(&self.intern_str[*id]),
             None => {
                 let s = Rc::from(s);
                 let intern_id = self.intern_str.len();
                 self.intern_str.push(Rc::clone(&s));
                 self.intern_ids.insert(Rc::clone(&s), intern_id);
-                ObjectContent::String(s)
+                s
             }
         }
     }

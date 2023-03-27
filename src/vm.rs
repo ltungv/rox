@@ -1,7 +1,7 @@
 //! Implementation of the bytecode virtual machine.
 
 use std::{
-    cell::{Ref, RefMut},
+    cell::RefCell,
     collections::HashMap,
     ops::{Add, Deref, Div, Mul, Neg, Not, Sub},
     rc::Rc,
@@ -9,7 +9,6 @@ use std::{
 };
 
 use crate::{
-    chunk::Chunk,
     compile::Parser,
     heap::Heap,
     object::{ObjFun, ObjectContent, ObjectError, ObjectRef},
@@ -93,15 +92,18 @@ impl VirtualMachine {
         });
 
         #[cfg(debug_assertions)]
-        match &fun.name {
-            None => disassemble_chunk(&fun.chunk.borrow(), "code"),
-            Some(s) => disassemble_chunk(&fun.chunk.borrow(), s),
-        };
+        {
+            let fun = fun.borrow();
+            match &fun.name {
+                None => disassemble_chunk(&fun.chunk, "code"),
+                Some(s) => disassemble_chunk(&fun.chunk, s),
+            };
+        }
 
         let mut task = Task::new(self);
         task.run().map_err(|err| {
             eprintln!("{err}");
-            let line = fun.chunk.borrow().get_line(self.frame().ip - 1);
+            let line = fun.borrow().chunk.get_line(self.frame().ip - 1);
             eprintln!("{line} in script");
             self.stack.reset();
             InterpretError::Runtime
@@ -187,7 +189,7 @@ impl<'vm> Task<'vm> {
                 self.vm.heap_trace();
                 self.vm.stack_trace();
                 let frame = self.vm.frame();
-                disassemble_instruction(&frame.chunk(), frame.ip);
+                disassemble_instruction(&frame.fun().borrow().chunk, frame.ip);
             }
             match Opcode::try_from(self.read_byte())? {
                 Opcode::Const => self.constant()?,
@@ -438,29 +440,21 @@ struct CallFrame {
 }
 
 impl CallFrame {
-    fn fun(&self) -> &ObjFun {
+    fn fun(&self) -> &RefCell<ObjFun> {
         self.fun.content.as_fun().expect("Expect function object.")
-    }
-
-    fn chunk(&self) -> Ref<'_, Chunk> {
-        self.fun().chunk.borrow()
-    }
-
-    fn chunk_mut(&self) -> RefMut<'_, Chunk> {
-        self.fun().chunk.borrow_mut()
     }
 
     /// Read the next byte in the stream of bytecode instructions.
     fn read_byte(&mut self) -> u8 {
-        let byte = self.chunk_mut().instructions[self.ip];
+        let byte = self.fun().borrow_mut().chunk.instructions[self.ip];
         self.ip += 1;
         byte
     }
 
     /// Read the next 2 bytes in the stream of bytecode instructions.
     fn read_short(&mut self) -> u16 {
-        let hi = self.chunk_mut().instructions[self.ip] as u16;
-        let lo = self.chunk_mut().instructions[self.ip + 1] as u16;
+        let hi = self.fun().borrow_mut().chunk.instructions[self.ip] as u16;
+        let lo = self.fun().borrow_mut().chunk.instructions[self.ip + 1] as u16;
         self.ip += 2;
         hi << 8 | lo
     }
@@ -469,7 +463,7 @@ impl CallFrame {
     /// index given by the byte.
     fn read_constant(&mut self) -> Value {
         let constant_id = self.read_byte() as usize;
-        self.chunk_mut().constants[constant_id]
+        self.fun().borrow_mut().chunk.constants[constant_id]
     }
 }
 
