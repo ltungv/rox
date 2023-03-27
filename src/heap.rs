@@ -17,19 +17,6 @@ impl Heap {
         self.alloc(content)
     }
 
-    /// Performs arithmetic addition on two object and returns a new object representing the result
-    /// of the operation.
-    pub(crate) fn add_objects(&mut self, lhs: &ObjectRef, rhs: &ObjectRef) -> ObjectRef {
-        match (&lhs.content, &rhs.content) {
-            (ObjectContent::String(s1), ObjectContent::String(s2)) => {
-                let s1 = String::from_str(s1).expect("Infallible.");
-                let s2 = String::from_str(s2).expect("Infallible.");
-                let s = s1 + &s2;
-                self.alloc_string(s)
-            }
-        }
-    }
-
     /// Interned a string and return the object's content holding the reference.
     fn take_string(&mut self, s: String) -> ObjectContent {
         match self.intern_ids.get(s.as_str()) {

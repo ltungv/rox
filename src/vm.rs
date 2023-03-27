@@ -4,12 +4,14 @@ use std::{
     collections::HashMap,
     ops::{Add, Deref, Div, Mul, Neg, Not, Sub},
     rc::Rc,
+    str::FromStr,
 };
 
 use crate::{
     chunk::Chunk,
     compile::Parser,
-    object::Heap,
+    heap::Heap,
+    object::ObjectContent,
     opcode::Opcode,
     stack::Stack,
     value::{Value, ValueError},
@@ -311,9 +313,14 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
         let lhs = self.stack_top()?;
         let res = match (*lhs, rhs) {
             // Operations on objects might allocate a new one.
-            (Value::Object(o1), Value::Object(o2)) => {
-                Value::Object(self.heap.add_objects(&o1, &o2))
-            }
+            (Value::Object(o1), Value::Object(o2)) => match (&o1.content, &o2.content) {
+                (ObjectContent::String(s1), ObjectContent::String(s2)) => {
+                    let s1 = String::from_str(s1).expect("Infallible.");
+                    let s2 = String::from_str(s2).expect("Infallible.");
+                    let s = s1 + &s2;
+                    Value::Object(self.heap.alloc_string(s))
+                }
+            },
             // Non-objects can used the `ops::Add` implementation for `Value`
             _ => lhs.add(&rhs)?,
         };

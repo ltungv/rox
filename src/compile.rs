@@ -2,7 +2,7 @@
 
 use crate::{
     chunk::Chunk,
-    object::Heap,
+    heap::Heap,
     opcode::Opcode,
     scan::{Kind, Line, Scanner, Token},
     stack::Stack,
