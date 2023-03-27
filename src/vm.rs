@@ -69,15 +69,13 @@ impl VirtualMachine {
     /// Compile and execute the given source code.
     pub fn interpret(&mut self, src: &str) -> Result<(), InterpretError> {
         let mut parser = Parser::new(src, &mut self.heap);
-        match parser.compile() {
-            None => Err(InterpretError::Compile),
-            Some(chunk) => {
-                #[cfg(debug_assertions)]
-                disassemble_chunk(&chunk, "code");
-                // Only run the chunk if we compiled it successfully.
-                self.run(&chunk)
-            }
-        }
+        let chunk = parser.compile().ok_or(InterpretError::Compile)?;
+
+        #[cfg(debug_assertions)]
+        disassemble_chunk(&chunk, "code");
+
+        // Only run the chunk if we compiled it successfully.
+        self.run(&chunk)
     }
 
     fn run(&mut self, chunk: &Chunk) -> Result<(), InterpretError> {
