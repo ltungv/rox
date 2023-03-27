@@ -21,6 +21,10 @@ impl<T, const N: usize> Default for Stack<T, N> {
 }
 
 impl<T, const N: usize> Stack<T, N> {
+    /// Set the stack pointer to 0.
+    pub(crate) fn reset(&mut self) {
+        self.pointer = 0;
+    }
     /// Push a value onto the stack and return its index. If the stack is full, then `Option::None`
     /// is returned, otherwise `Option::Some(index)` is returned.
     pub(crate) fn push(&mut self, value: T) -> Option<usize> {

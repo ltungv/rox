@@ -74,14 +74,12 @@ impl VirtualMachine {
         #[cfg(debug_assertions)]
         disassemble_chunk(&chunk, "code");
 
-        // Only run the chunk if we compiled it successfully.
-        self.run(&chunk)
-    }
-
-    fn run(&mut self, chunk: &Chunk) -> Result<(), InterpretError> {
-        let mut task = Task::new(self, chunk);
+        let mut task = Task::new(self, &chunk);
         task.run().map_err(|err| {
             eprintln!("{err}");
+            let line = chunk.get_line(task.ip);
+            eprintln!("{line} in script");
+            self.stack.reset();
             InterpretError::Runtime
         })
     }
@@ -97,6 +95,7 @@ struct Task<'vm, 'chunk> {
 }
 
 impl<'vm, 'chunk> Task<'vm, 'chunk> {
+    /// Create a new task given the chunk to be run.
     fn new(vm: &'vm mut VirtualMachine, chunk: &'chunk Chunk) -> Self {
         Self {
             ip: 0,
@@ -107,12 +106,14 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
         }
     }
 
+    /// Read the next byte in the stream of bytecode instructions.
     fn read_byte(&mut self) -> u8 {
         let byte = self.chunk.instructions[self.ip];
         self.ip += 1;
         byte
     }
 
+    /// Read the next 2 bytes in the stream of bytecode instructions.
     fn read_short(&mut self) -> u16 {
         let hi = self.chunk.instructions[self.ip] as u16;
         let lo = self.chunk.instructions[self.ip + 1] as u16;
@@ -120,6 +121,8 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
         hi << 8 | lo
     }
 
+    /// Read the next byte in the stream of bytecode instructions and return the constant at the
+    /// index given by the byte.
     fn read_constant(&mut self) -> &Value {
         let constant_id = self.read_byte() as usize;
         &self.chunk.constants[constant_id]

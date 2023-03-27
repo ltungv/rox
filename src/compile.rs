@@ -4,7 +4,7 @@ use crate::{
     chunk::Chunk,
     object::Heap,
     opcode::Opcode,
-    scan::{Kind, Line, ScanErrors, Scanner, Token},
+    scan::{Kind, Line, Scanner, Token},
     stack::Stack,
     value::Value,
 };
@@ -944,22 +944,20 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
     }
 
-    /// Go through the tokens return by the scanner a set up 2 fields `token_prev` and
-    /// `token_curr`.
+    /// Go through the tokens return by the scanner a set up 2 fields
+    /// `token_prev` and `token_curr`.
     fn advance(&mut self) {
-        let mut scan_errors = ScanErrors::default();
         loop {
             match self.scanner.scan() {
-                Err(err) => scan_errors.push(err),
+                Err(err) => {
+                    self.had_error = true;
+                    eprintln!("{err}");
+                }
                 Ok(token) => {
                     self.token_prev = std::mem::replace(&mut self.token_curr, token);
                     break;
                 }
             }
-        }
-        if !scan_errors.is_empty() {
-            self.had_error = true;
-            eprintln!("{scan_errors}");
         }
     }
 

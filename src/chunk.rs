@@ -40,7 +40,6 @@ impl Chunk {
     }
 
     /// Get the line information of the bytecode at a specific offset.
-    #[cfg(debug_assertions)]
     pub(crate) fn get_line(&self, offset: usize) -> Line {
         let mut total_run_length = 0;
         for (i, run_length) in self.line_run_lengths.iter().enumerate() {

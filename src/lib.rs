@@ -11,6 +11,7 @@ mod scan;
 mod stack;
 mod value;
 mod vm;
+mod heap;
 
 pub use compile::CompileError;
 pub use vm::{RuntimeError, VirtualMachine};
