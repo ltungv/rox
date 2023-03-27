@@ -1,6 +1,6 @@
-use std::{cmp::Ordering, fmt, ops, rc::Rc};
+use std::{cmp::Ordering, fmt, ops};
 
-use crate::object::{ObjectContent, ObjectRef};
+use crate::object::ObjectRef;
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ValueError {
@@ -25,13 +25,11 @@ pub(crate) enum Value {
 
 impl Value {
     /// Cast the value as a constant string
-    pub(crate) fn as_str(&self) -> Result<Rc<str>, ValueError> {
-        if let Value::Object(o) = self {
-            if let ObjectContent::String(s) = &o.content {
-                return Ok(Rc::clone(s));
-            }
+    pub(crate) fn as_object(&self) -> Result<ObjectRef, ValueError> {
+        match self {
+            Self::Object(o) => Ok(*o),
+            _ => Err(ValueError::InvalidCast),
         }
-        Err(ValueError::InvalidCast)
     }
 
     pub(crate) fn is_truthy(&self) -> bool {

@@ -11,7 +11,7 @@ use crate::{
     chunk::Chunk,
     compile::Parser,
     heap::Heap,
-    object::ObjectContent,
+    object::{ObjectContent, ObjectError},
     opcode::Opcode,
     stack::Stack,
     value::{Value, ValueError},
@@ -31,6 +31,14 @@ pub enum RuntimeError {
     #[error(transparent)]
     InvalidOpcode(#[from] num_enum::TryFromPrimitiveError<Opcode>),
 
+    /// Can't perform some operations given the current value(s).
+    #[error(transparent)]
+    Value(#[from] ValueError),
+
+    /// Can't perform some operations given the current object(s).
+    #[error(transparent)]
+    Object(#[from] ObjectError),
+
     /// Overflown the virtual machine's stack.
     #[error("Stack is overflown.")]
     StackOverflown,
@@ -38,10 +46,6 @@ pub enum RuntimeError {
     /// Exhausted the virtual machine's stack.
     #[error("Stack is exhausted.")]
     StackExhausted,
-
-    /// Can't perform some operations given the current operand(s).
-    #[error(transparent)]
-    Value(#[from] ValueError),
 
     /// Can't find a variable in scope.
     #[error("Undefined variable '{0}'.")]
@@ -223,7 +227,7 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
 
     /// Get a global variable or return a runtime error if it was not found.
     fn get_global(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant().as_str()?;
+        let name = self.read_constant().as_object()?.content.as_string()?;
         let value = self
             .globals
             .get(&name)
@@ -236,19 +240,19 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
 
     /// Set a global variable or return a runtime error if it was not found.
     fn set_global(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant().as_str()?;
+        let name = self.read_constant().as_object()?.content.as_string()?;
         let value = self.stack_top()?;
-        if self.globals.insert(Rc::clone(&name), *value).is_none() {
-            self.globals.remove(&name);
+        if !self.globals.contains_key(&name) {
             return Err(RuntimeError::UndefinedVariable(name.to_string()));
         }
+        self.globals.insert(name, *value);
         Ok(())
     }
 
     /// Declare a variable with some initial value.
     fn defined_global(&mut self) -> Result<(), RuntimeError> {
         let constant = *self.read_constant();
-        let global_name = constant.as_str()?;
+        let global_name = constant.as_object()?.content.as_string()?;
         let global_value = self.stack_pop()?;
         self.globals.insert(global_name, global_value);
         Ok(())
@@ -319,6 +323,11 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
                     let s2 = String::from_str(s2).expect("Infallible.");
                     let s = s1 + &s2;
                     Value::Object(self.heap.alloc_string(s))
+                }
+                _ => {
+                    return Err(RuntimeError::Value(ValueError::InvalidUse(
+                        "Operands must be two numbers or two strings.",
+                    )))
                 }
             },
             // Non-objects can used the `ops::Add` implementation for `Value`

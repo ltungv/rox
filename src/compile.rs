@@ -23,7 +23,7 @@ pub enum CompileError {
 
     /// Errors with arbitrary message.
     #[error("{0}")]
-    Generic(String),
+    Simple(String),
 }
 
 /// Scan for tokens and emit corresponding bytecodes.
@@ -992,12 +992,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Create an compilation error pointing at the line of the previous token.
     fn error_prev(&mut self, message: &str) -> CompileError {
-        CompileError::Generic(self.error_at(self.token_prev.line, self.token_prev.lexeme, message))
+        CompileError::Simple(self.error_at(self.token_prev.line, self.token_prev.lexeme, message))
     }
 
     /// Create an compilation error pointing at the line of the current token.
     fn error_curr(&mut self, message: &str) -> CompileError {
-        CompileError::Generic(self.error_at(self.token_curr.line, self.token_curr.lexeme, message))
+        CompileError::Simple(self.error_at(self.token_curr.line, self.token_curr.lexeme, message))
     }
 
     /// Create an compilation error pointing at a particular line and lexeme.

@@ -1,5 +1,13 @@
 use std::{fmt, ops, ptr::NonNull, rc::Rc};
 
+use crate::chunk::Chunk;
+
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ObjectError {
+    #[error("Invalid cast.")]
+    InvalidCast,
+}
+
 /// A reference to the heap-allocated object.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ObjectRef(pub(crate) NonNull<Object>);
@@ -17,7 +25,11 @@ impl ops::Deref for ObjectRef {
 
 impl PartialEq for ObjectRef {
     fn eq(&self, other: &Self) -> bool {
-        self.content.eq(&other.content)
+        match (&self.content, &other.content) {
+            (ObjectContent::String(s1), ObjectContent::String(s2)) => Rc::ptr_eq(s1, s2),
+            (ObjectContent::Fun(_), ObjectContent::Fun(_)) => self.0.eq(&other.0),
+            _ => false,
+        }
     }
 }
 impl fmt::Display for ObjectRef {
@@ -27,7 +39,7 @@ impl fmt::Display for ObjectRef {
 }
 
 /// The structure of a heap-allocated object.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Object {
     /// A pointer to the next object in the linked list of allocated objects.
     pub(crate) next: Option<NonNull<Object>>,
@@ -42,14 +54,14 @@ impl fmt::Display for Object {
 }
 
 /// A enumeration of all supported object types in Lox and their underlying value.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum ObjectContent {
     /// A heap allocated string
     String(Rc<str>),
     // /// A closure that can captured surrounding variables
     // Closure(Gc<ObjClosure>),
     // /// A function object
-    // Fun(Gc<ObjFun>),
+    Fun(ObjFun),
     // /// A class object
     // Class(Gc<RefCell<ObjClass>>),
     // /// A class instance
@@ -58,10 +70,18 @@ pub(crate) enum ObjectContent {
     // BoundMethod(Gc<ObjBoundMethod>),
 }
 
-impl PartialEq for ObjectContent {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (ObjectContent::String(s1), ObjectContent::String(s2)) => Rc::ptr_eq(s1, s2),
+impl ObjectContent {
+    pub(crate) fn as_string(&self) -> Result<Rc<str>, ObjectError> {
+        match self {
+            Self::String(s) => Ok(Rc::clone(s)),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
+
+    pub(crate) fn as_fun(&self) -> Result<&ObjFun, ObjectError> {
+        match self {
+            Self::Fun(f) => Ok(f),
+            _ => Err(ObjectError::InvalidCast),
         }
     }
 }
@@ -71,10 +91,29 @@ impl fmt::Display for ObjectContent {
         match self {
             Self::String(s) => write!(f, "{s}"),
             // Self::Closure(c) => write!(f, "{c}"),
-            // Self::Fun(fun) => write!(f, "{fun}"),
+            Self::Fun(fun) => write!(f, "{fun}"),
             // Self::Class(c) => write!(f, "{}", c.borrow()),
             // Self::Instance(i) => write!(f, "{}", i.borrow()),
             // Self::BoundMethod(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct ObjFun {
+    /// The name of the function
+    pub(crate) name: Option<Rc<str>>,
+    /// Number of parameters the function has
+    pub(crate) arity: u8,
+    /// The bytecode chunk of this function
+    pub(crate) chunk: Chunk,
+}
+
+impl fmt::Display for ObjFun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        match &self.name {
+            None => write!(f, "<script>"),
+            Some(s) => write!(f, "<fn {s}>"),
         }
     }
 }
