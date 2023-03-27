@@ -19,9 +19,9 @@ pub use vm::{RuntimeError, VirtualMachine};
 #[derive(Debug, thiserror::Error)]
 pub enum InterpretError {
     /// Error with compiling the source code.
-    #[error(transparent)]
-    Compile(#[from] CompileError),
+    #[error("Compile error.")]
+    Compile,
     /// Error with running the bytecode.
-    #[error(transparent)]
-    Runtime(#[from] RuntimeError),
+    #[error("Runtime error.")]
+    Runtime,
 }

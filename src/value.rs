@@ -6,7 +6,7 @@ use crate::object::{ObjectContent, ObjectRef};
 pub enum ValueError {
     #[error("{0}")]
     InvalidUse(&'static str),
-    #[error("Invalid cast")]
+    #[error("Invalid cast.")]
     InvalidCast,
 }
 
@@ -25,7 +25,7 @@ pub(crate) enum Value {
 
 impl Value {
     /// Cast the value as a constant string
-    pub fn as_str(&self) -> Result<Rc<str>, ValueError> {
+    pub(crate) fn as_str(&self) -> Result<Rc<str>, ValueError> {
         if let Value::Object(o) = self {
             if let ObjectContent::String(s) = &o.content {
                 return Ok(Rc::clone(s));
@@ -33,9 +33,7 @@ impl Value {
         }
         Err(ValueError::InvalidCast)
     }
-}
 
-impl Value {
     pub(crate) fn is_truthy(&self) -> bool {
         match self {
             Value::Bool(b) => *b,
@@ -49,6 +47,38 @@ impl Value {
             Value::Bool(b) => !b,
             Value::Nil => true,
             _ => false,
+        }
+    }
+
+    pub(crate) fn lt(&self, other: &Self) -> Result<Value, ValueError> {
+        match self.partial_cmp(other) {
+            Some(Ordering::Less) => Ok(Value::Bool(true)),
+            Some(_) => Ok(Value::Bool(false)),
+            None => Err(ValueError::InvalidUse("Operands must be numbers.")),
+        }
+    }
+
+    pub(crate) fn le(&self, other: &Self) -> Result<Value, ValueError> {
+        match self.partial_cmp(other) {
+            Some(Ordering::Less | Ordering::Equal) => Ok(Value::Bool(true)),
+            Some(_) => Ok(Value::Bool(false)),
+            None => Err(ValueError::InvalidUse("Operands must be numbers.")),
+        }
+    }
+
+    pub(crate) fn gt(&self, other: &Self) -> Result<Value, ValueError> {
+        match self.partial_cmp(other) {
+            Some(Ordering::Greater) => Ok(Value::Bool(true)),
+            Some(_) => Ok(Value::Bool(false)),
+            None => Err(ValueError::InvalidUse("Operands must be numbers.")),
+        }
+    }
+
+    pub(crate) fn ge(&self, other: &Self) -> Result<Value, ValueError> {
+        match self.partial_cmp(other) {
+            Some(Ordering::Greater | Ordering::Equal) => Ok(Value::Bool(true)),
+            Some(_) => Ok(Value::Bool(false)),
+            None => Err(ValueError::InvalidUse("Operands must be numbers.")),
         }
     }
 }
@@ -81,7 +111,7 @@ impl ops::Add for &Value {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 + n2)),
             _ => Err(ValueError::InvalidUse(
-                "Operands must be two numbers or two strings",
+                "Operands must be two numbers or two strings.",
             )),
         }
     }
@@ -93,7 +123,7 @@ impl ops::Sub for &Value {
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 - n2)),
-            _ => Err(ValueError::InvalidUse("Operands must be numbers")),
+            _ => Err(ValueError::InvalidUse("Operands must be numbers.")),
         }
     }
 }
@@ -104,7 +134,7 @@ impl ops::Mul for &Value {
     fn mul(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 * n2)),
-            _ => Err(ValueError::InvalidUse("Operands must be numbers")),
+            _ => Err(ValueError::InvalidUse("Operands must be numbers.")),
         }
     }
 }
@@ -115,7 +145,7 @@ impl ops::Div for &Value {
     fn div(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 / n2)),
-            _ => Err(ValueError::InvalidUse("Operands must be numbers")),
+            _ => Err(ValueError::InvalidUse("Operands must be numbers.")),
         }
     }
 }
@@ -126,7 +156,7 @@ impl ops::Neg for &Value {
     fn neg(self) -> Self::Output {
         match self {
             Value::Number(n) => Ok(Value::Number(-n)),
-            _ => Err(ValueError::InvalidUse("Operand must be a number")),
+            _ => Err(ValueError::InvalidUse("Operand must be a number.")),
         }
     }
 }

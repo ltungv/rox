@@ -27,7 +27,6 @@ fn run_repl() {
             eprintln!("{err}");
             process::exit(74);
         };
-
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Err(err) => {
@@ -38,9 +37,7 @@ fn run_repl() {
                 if n == 0 {
                     break;
                 }
-                if let Err(e) = vm.interpret(&line) {
-                    eprintln!("{e}");
-                }
+                vm.interpret(&line).ok();
             }
         }
     }
@@ -54,17 +51,10 @@ fn run_file(path: &str) {
             process::exit(74);
         }
     };
-
     let mut vm = VirtualMachine::new();
     match vm.interpret(&src) {
         Ok(()) => {}
-        Err(InterpretError::Compile(err)) => {
-            eprintln!("{err}");
-            process::exit(65);
-        }
-        Err(InterpretError::Runtime(err)) => {
-            eprintln!("{err}");
-            process::exit(70);
-        }
+        Err(InterpretError::Compile) => process::exit(65),
+        Err(InterpretError::Runtime) => process::exit(70),
     }
 }

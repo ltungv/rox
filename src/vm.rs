@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashMap,
-    ops::{Add, Div, Mul, Neg, Not, Sub},
+    ops::{Add, Deref, Div, Mul, Neg, Not, Sub},
     rc::Rc,
 };
 
@@ -42,7 +42,7 @@ pub enum RuntimeError {
     Value(#[from] ValueError),
 
     /// Can't find a variable in scope.
-    #[error("Undefined variable '{0}'")]
+    #[error("Undefined variable '{0}'.")]
     UndefinedVariable(String),
 }
 
@@ -69,19 +69,23 @@ impl VirtualMachine {
     /// Compile and execute the given source code.
     pub fn interpret(&mut self, src: &str) -> Result<(), InterpretError> {
         let mut parser = Parser::new(src, &mut self.heap);
-        if let Some(chunk) = parser.compile() {
-            #[cfg(debug_assertions)]
-            disassemble_chunk(&chunk, "code");
-            // Only run the chunk if we compiled it successfully.
-            self.run(&chunk)?;
+        match parser.compile() {
+            None => Err(InterpretError::Compile),
+            Some(chunk) => {
+                #[cfg(debug_assertions)]
+                disassemble_chunk(&chunk, "code");
+                // Only run the chunk if we compiled it successfully.
+                self.run(&chunk)
+            }
         }
-        Ok(())
     }
 
-    fn run(&mut self, chunk: &Chunk) -> Result<(), RuntimeError> {
+    fn run(&mut self, chunk: &Chunk) -> Result<(), InterpretError> {
         let mut task = Task::new(self, chunk);
-        task.run()?;
-        Ok(())
+        task.run().map_err(|err| {
+            eprintln!("{err}");
+            InterpretError::Runtime
+        })
     }
 }
 
@@ -257,32 +261,44 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
     }
 
     fn ne(&mut self) -> Result<(), RuntimeError> {
-        self.apply_binary(|l, r| Value::Bool(l.ne(&r)))?;
+        let rhs = self.stack_pop()?;
+        let lhs = self.stack_top_mut()?;
+        *lhs = Value::Bool(lhs.deref().ne(&rhs));
         Ok(())
     }
 
     fn eq(&mut self) -> Result<(), RuntimeError> {
-        self.apply_binary(|l, r| Value::Bool(l.eq(&r)))?;
+        let rhs = self.stack_pop()?;
+        let lhs = self.stack_top_mut()?;
+        *lhs = Value::Bool(lhs.deref().eq(&rhs));
         Ok(())
     }
 
     fn gt(&mut self) -> Result<(), RuntimeError> {
-        self.apply_binary(|l, r| Value::Bool(l.gt(&r)))?;
+        let rhs = self.stack_pop()?;
+        let lhs = self.stack_top_mut()?;
+        *lhs = lhs.deref().gt(&rhs)?;
         Ok(())
     }
 
     fn ge(&mut self) -> Result<(), RuntimeError> {
-        self.apply_binary(|l, r| Value::Bool(l.ge(&r)))?;
+        let rhs = self.stack_pop()?;
+        let lhs = self.stack_top_mut()?;
+        *lhs = lhs.deref().ge(&rhs)?;
         Ok(())
     }
 
     fn lt(&mut self) -> Result<(), RuntimeError> {
-        self.apply_binary(|l, r| Value::Bool(l.lt(&r)))?;
+        let rhs = self.stack_pop()?;
+        let lhs = self.stack_top_mut()?;
+        *lhs = lhs.deref().lt(&rhs)?;
         Ok(())
     }
 
     fn le(&mut self) -> Result<(), RuntimeError> {
-        self.apply_binary(|l, r| Value::Bool(l.le(&r)))?;
+        let rhs = self.stack_pop()?;
+        let lhs = self.stack_top_mut()?;
+        *lhs = lhs.deref().le(&rhs)?;
         Ok(())
     }
 
@@ -291,8 +307,8 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
         // disallow us from mutating the `self.heap` while calling the function. This happens
         // because the function also holds an exclusive reference to `self`.
         let rhs = self.stack_pop()?;
-        let lhs = *self.stack_top()?;
-        let res = match (lhs, rhs) {
+        let lhs = self.stack_top()?;
+        let res = match (*lhs, rhs) {
             // Operations on objects might allocate a new one.
             (Value::Object(o1), Value::Object(o2)) => {
                 Value::Object(self.heap.add_objects(&o1, &o2))
@@ -306,75 +322,41 @@ impl<'vm, 'chunk> Task<'vm, 'chunk> {
     }
 
     fn sub(&mut self) -> Result<(), RuntimeError> {
-        self.apply_binary_err(|l, r| Ok(l.sub(&r)?))
+        let rhs = self.stack_pop()?;
+        let lhs = self.stack_top_mut()?;
+        *lhs = lhs.deref().sub(&rhs)?;
+        Ok(())
     }
 
     fn mul(&mut self) -> Result<(), RuntimeError> {
-        self.apply_binary_err(|l, r| Ok(l.mul(&r)?))
+        let rhs = self.stack_pop()?;
+        let lhs = self.stack_top_mut()?;
+        *lhs = lhs.deref().mul(&rhs)?;
+        Ok(())
     }
 
     fn div(&mut self) -> Result<(), RuntimeError> {
-        self.apply_binary_err(|l, r| Ok(l.div(&r)?))
+        let rhs = self.stack_pop()?;
+        let lhs = self.stack_top_mut()?;
+        *lhs = lhs.deref().div(&rhs)?;
+        Ok(())
     }
 
     fn not(&mut self) -> Result<(), RuntimeError> {
-        self.apply_unary(|v| v.not())?;
+        let v = self.stack_top_mut()?;
+        *v = v.not();
         Ok(())
     }
 
     fn neg(&mut self) -> Result<(), RuntimeError> {
-        self.apply_unary_err(|v| Ok(v.neg()?))
+        let v = self.stack_top_mut()?;
+        *v = v.neg()?;
+        Ok(())
     }
 
     fn print(&mut self) -> Result<(), RuntimeError> {
         let val = self.stack_pop()?;
         println!("{val}");
-        Ok(())
-    }
-
-    /// Apply a unary function on the stack.
-    fn apply_unary<F>(&mut self, mut func: F) -> Result<(), RuntimeError>
-    where
-        F: FnMut(Value) -> Value,
-    {
-        // Change the top of the stack in-place without doing a pop.
-        let v = self.stack_top_mut()?;
-        *v = func(*v);
-        Ok(())
-    }
-
-    /// Apply a unary function that might return an error on the stack.
-    fn apply_unary_err<F>(&mut self, mut func: F) -> Result<(), RuntimeError>
-    where
-        F: FnMut(Value) -> Result<Value, RuntimeError>,
-    {
-        // Change the top of the stack in-place without doing a pop.
-        let v = self.stack_top_mut()?;
-        *v = func(*v)?;
-        Ok(())
-    }
-
-    /// Apply a binary function on the stack.
-    fn apply_binary<F>(&mut self, mut func: F) -> Result<(), RuntimeError>
-    where
-        F: FnMut(Value, Value) -> Value,
-    {
-        // Pop once, then change the top of the stack in-place without doing a second pop.
-        let rhs = self.stack_pop()?;
-        let lhs = self.stack_top_mut()?;
-        *lhs = func(*lhs, rhs);
-        Ok(())
-    }
-
-    /// Apply a binary function that might return an error on the stack.
-    fn apply_binary_err<F>(&mut self, mut func: F) -> Result<(), RuntimeError>
-    where
-        F: FnMut(Value, Value) -> Result<Value, RuntimeError>,
-    {
-        // Pop once, then change the top of the stack in-place without doing a second pop.
-        let rhs = self.stack_pop()?;
-        let lhs = self.stack_top_mut()?;
-        *lhs = func(*lhs, rhs)?;
         Ok(())
     }
 
