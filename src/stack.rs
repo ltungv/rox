@@ -1,6 +1,6 @@
 use std::{
     mem::{self, MaybeUninit},
-    ops::{Index, IndexMut},
+    ops::{Index, IndexMut, RangeFrom},
 };
 
 /// A static stack implementation.
@@ -21,10 +21,21 @@ impl<T, const N: usize> Default for Stack<T, N> {
 }
 
 impl<T, const N: usize> Stack<T, N> {
+    /// Get the number of items in the stack.
+    pub(crate) fn len(&self) -> usize {
+        self.pointer
+    }
+
     /// Set the stack pointer to 0.
     pub(crate) fn reset(&mut self) {
-        self.pointer = 0;
+        self.reset_to(0);
     }
+
+    /// Set the stack pointer to 0.
+    pub(crate) fn reset_to(&mut self, n: usize) {
+        self.pointer = n;
+    }
+
     /// Push a value onto the stack and return its index. If the stack is full, then `Option::None`
     /// is returned, otherwise `Option::Some(index)` is returned.
     pub(crate) fn push(&mut self, value: T) -> Option<usize> {
@@ -57,12 +68,12 @@ impl<T, const N: usize> Stack<T, N> {
     /// Get a shared reference to the value at the top of the stack . If the stack is empty,
     /// then `Option::None` is returned, otherwise `Option::Some<&T>` is returned.
     #[allow(unsafe_code)]
-    pub(crate) fn top(&self) -> Option<&T> {
-        if self.pointer == 0 {
+    pub(crate) fn top(&self, n: usize) -> Option<&T> {
+        if self.pointer <= n {
             return None;
         }
         let value = {
-            let tmp = &self.items[self.pointer - 1];
+            let tmp = &self.items[self.pointer - n - 1];
             // SAFETY: We ensure that pointer always points to initialized items. Thus, tmp
             // must contain initialized data.
             unsafe { &*tmp.as_ptr() }
@@ -73,12 +84,12 @@ impl<T, const N: usize> Stack<T, N> {
     /// Get an exclusive reference to the value at the top of the stack . If the stack is empty,
     /// then `Option::None` is returned, otherwise `Option::Some<&mut T>` is returned.
     #[allow(unsafe_code)]
-    pub(crate) fn top_mut(&mut self) -> Option<&mut T> {
-        if self.pointer == 0 {
+    pub(crate) fn top_mut(&mut self, n: usize) -> Option<&mut T> {
+        if self.pointer <= n {
             return None;
         }
         let value = {
-            let tmp = &mut self.items[self.pointer - 1];
+            let tmp = &mut self.items[self.pointer - n - 1];
             // SAFETY: We ensure that pointer always points to initialized items. Thus, tmp
             // must contain initialized data.
             unsafe { &mut *tmp.as_mut_ptr() }
@@ -122,6 +133,19 @@ impl<T, const N: usize> IndexMut<usize> for Stack<T, N> {
         // SAFETY: We ensure that indices less than the stack pointer always point to
         // initialized items. Thus, tmp must contain initialized data.
         unsafe { &mut *tmp.as_mut_ptr() }
+    }
+}
+
+impl<T, const N: usize> Index<RangeFrom<usize>> for Stack<T, N> {
+    type Output = [T];
+
+    #[allow(unsafe_code)]
+    fn index(&self, range: RangeFrom<usize>) -> &Self::Output {
+        let tmp = &self.items[range.start..self.pointer];
+        let tmp: MaybeUninit<&[T]> = unsafe { mem::transmute(tmp) };
+        // SAFETY: We ensure that indices less than the stack pointer always point to
+        // initialized items. Thus, tmp must contain initialized data.
+        unsafe { *tmp.as_ptr() }
     }
 }
 

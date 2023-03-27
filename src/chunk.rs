@@ -111,6 +111,7 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
             disassemble_jump(chunk, offset, JumpDirection::Forward, "OP_JUMP_IF_FALSE")
         }
         Opcode::Loop => disassemble_jump(chunk, offset, JumpDirection::Backward, "OP_LOOP"),
+        Opcode::Call => disassemble_byte(chunk, offset, "OP_CALL"),
         Opcode::Ret => disassemble_simple(offset, "OP_RET"),
         _ => unreachable!(),
     }

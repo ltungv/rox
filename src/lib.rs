@@ -13,7 +13,6 @@ mod stack;
 mod value;
 mod vm;
 
-pub use compile::CompileError;
 pub use vm::{RuntimeError, VirtualMachine};
 
 /// A enumeration of all potential errors that might occur when working with the virtual machine.

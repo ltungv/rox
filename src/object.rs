@@ -1,6 +1,6 @@
 use std::{cell::RefCell, fmt, ops, ptr::NonNull, rc::Rc};
 
-use crate::chunk::Chunk;
+use crate::{chunk::Chunk, value::Value};
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ObjectError {
@@ -28,6 +28,9 @@ impl PartialEq for ObjectRef {
         match (&self.content, &other.content) {
             (ObjectContent::String(s1), ObjectContent::String(s2)) => Rc::ptr_eq(s1, s2),
             (ObjectContent::Fun(_), ObjectContent::Fun(_)) => self.0.eq(&other.0),
+            (ObjectContent::NativeFun(f1), ObjectContent::NativeFun(f2)) => {
+                Rc::ptr_eq(&f1.name, &f2.name)
+            }
             _ => false,
         }
     }
@@ -60,8 +63,10 @@ pub(crate) enum ObjectContent {
     String(Rc<str>),
     // /// A closure that can captured surrounding variables
     // Closure(Gc<ObjClosure>),
-    // /// A function object
+    /// A function object
     Fun(RefCell<ObjFun>),
+    /// A native function object
+    NativeFun(NativeFun),
     // /// A class object
     // Class(Gc<RefCell<ObjClass>>),
     // /// A class instance
@@ -92,6 +97,7 @@ impl fmt::Display for ObjectContent {
             Self::String(s) => write!(f, "{s}"),
             // Self::Closure(c) => write!(f, "{c}"),
             Self::Fun(fun) => write!(f, "{}", fun.borrow()),
+            Self::NativeFun(fun) => write!(f, "{fun}"),
             // Self::Class(c) => write!(f, "{}", c.borrow()),
             // Self::Instance(i) => write!(f, "{}", i.borrow()),
             // Self::BoundMethod(m) => write!(f, "{m}"),
@@ -125,5 +131,27 @@ impl fmt::Display for ObjFun {
             None => write!(f, "<script>"),
             Some(s) => write!(f, "<fn {s}>"),
         }
+    }
+}
+
+/// A native function
+pub(crate) struct NativeFun {
+    /// Function's name
+    pub(crate) name: Rc<str>,
+    /// Number of parameters
+    pub(crate) arity: u8,
+    /// Native function reference
+    pub(crate) call: fn(&[Value]) -> Value,
+}
+
+impl fmt::Display for NativeFun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(f, "<native fn>")
+    }
+}
+
+impl fmt::Debug for NativeFun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(f, "<native fn>")
     }
 }
