@@ -453,7 +453,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                 // Stop if we've gone through all initialized variable in the current scope.
                 break;
             }
-            if local.name.lexeme == name.lexeme {
+            if local.name == name.lexeme {
                 // Return an error if any variable in the current scope has the same name.
                 return Err(self.error_prev("Already a variable with this name in this scope"));
             }
@@ -466,7 +466,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // When a local variable is first declared, it is marked as "uninitialized" by setting
         // depth=-1. Once we finish parsing the variable initializer, we set depth back to its
         // correct scope depth.
-        let local = Local { name, depth: -1 };
+        let local = Local {
+            name: name.lexeme,
+            depth: -1,
+        };
         compiler
             .locals
             .push(local)
@@ -763,7 +766,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let compiler = self.compiler();
         // Walk up from low scope to high scope.
         for (id, local) in compiler.locals.into_iter().enumerate().rev() {
-            if local.name.lexeme == name.lexeme {
+            if local.name == name.lexeme {
                 if local.depth == -1 {
                     // Found a variable used in its own initializer.
                     return Err(self.error_prev("Can't read local variable in its own initializer"));
@@ -1048,10 +1051,12 @@ struct Compiler<'src> {
 
 impl<'src> Compiler<'src> {
     fn new(fun: ObjectRef, fun_type: FunctionType) -> Self {
+        let mut locals = Stack::default();
+        locals.push(Local { name: "", depth: 0 });
         Self {
             fun,
             fun_type,
-            locals: Stack::default(),
+            locals,
             scope_depth: 0,
         }
     }
@@ -1061,7 +1066,7 @@ impl<'src> Compiler<'src> {
 #[derive(Debug)]
 struct Local<'src> {
     /// The token that stores the name of the local identifier.
-    name: Token<'src>,
+    name: &'src str,
     /// The scope depth in which the local variable was declared.
     depth: isize,
 }
