@@ -3,12 +3,16 @@
 use crate::{
     chunk::Chunk,
     heap::Heap,
+    object::{ObjFun, ObjectRef},
     opcode::Opcode,
     scan::{Kind, Line, Scanner, Token},
     stack::Stack,
     value::Value,
 };
-use std::{mem, num::ParseFloatError};
+use std::{
+    cell::{Ref, RefMut},
+    num::ParseFloatError,
+};
 
 #[cfg(debug_assertions)]
 use crate::chunk::disassemble_chunk;
@@ -86,42 +90,51 @@ pub(crate) struct Parser<'src, 'vm> {
     compiler: Compiler<'src>,
     /// The heap of the currently running virtual machine.
     heap: &'vm mut Heap,
-    /// The chunk that is being written to.
-    chunk: Chunk,
 }
 
 impl<'src, 'vm> Parser<'src, 'vm> {
     /// Create a new parser that reads the given source string.
     pub(crate) fn new(src: &'src str, heap: &'vm mut Heap) -> Self {
+        let fun = heap.alloc_fun(ObjFun::default());
         Self {
             had_error: false,
             token_prev: Token::placeholder(),
             token_curr: Token::placeholder(),
             scanner: Scanner::new(src),
-            compiler: Compiler::default(),
+            compiler: Compiler::new(fun, FunctionType::Script),
             heap,
-            chunk: Chunk::default(),
         }
     }
 
     /// Compile the source and returns its chunk.
-    pub(crate) fn compile(&mut self) -> Option<Chunk> {
-        let chunk = self.build_chunk();
+    pub(crate) fn compile(&mut self) -> Option<ObjectRef> {
+        self.build_chunk();
         if self.had_error {
             #[cfg(debug_assertions)]
-            disassemble_chunk(&chunk, "code");
+            {
+                let fun = self
+                    .compiler()
+                    .fun
+                    .content
+                    .as_fun()
+                    .expect("Expect function object.");
+                let chunk = fun.chunk.borrow();
+                match &fun.name {
+                    None => disassemble_chunk(&chunk, "code"),
+                    Some(s) => disassemble_chunk(&chunk, s),
+                };
+            }
             return None;
         }
-        Some(chunk)
+        Some(self.compiler().fun)
     }
 
-    fn build_chunk(&mut self) -> Chunk {
+    fn build_chunk(&mut self) {
         self.advance();
         while !self.advance_if(Kind::Eof) {
             self.declaration();
         }
         self.emit(Opcode::Ret);
-        mem::take(self.chunk_mut())
     }
 
     /// Parse declaration assuming that we're at the start of a statement. If no declaration is
@@ -873,21 +886,33 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Write a constant to the currently compiling chunk.
     fn make_constant(&mut self, value: Value) -> Result<u8, CompileError> {
-        let constant_id = match self.chunk_mut().write_constant(value) {
-            None => return Err(self.error_prev("Too many constants in one chunk")),
-            Some(id) => id,
-        };
-        Ok(constant_id as u8)
+        let constant_id = self.chunk_mut().write_constant(value);
+        match constant_id {
+            None => Err(self.error_prev("Too many constants in one chunk")),
+            Some(id) => Ok(id as u8),
+        }
     }
 
     /// Get a shared reference to the currently compiling chunk.
-    fn chunk(&self) -> &Chunk {
-        &self.chunk
+    fn chunk(&self) -> Ref<'_, Chunk> {
+        let fun = self
+            .compiler()
+            .fun
+            .content
+            .as_fun()
+            .expect("Expect function object.");
+        fun.chunk.borrow()
     }
 
     /// Get a mutable reference to the currently compiling chunk.
-    fn chunk_mut(&mut self) -> &mut Chunk {
-        &mut self.chunk
+    fn chunk_mut(&mut self) -> RefMut<'_, Chunk> {
+        let fun = self
+            .compiler()
+            .fun
+            .content
+            .as_fun()
+            .expect("Expect function object.");
+        fun.chunk.borrow_mut()
     }
 
     /// Start a new scope.
@@ -991,17 +1016,17 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     /// Create an compilation error pointing at the line of the previous token.
-    fn error_prev(&mut self, message: &str) -> CompileError {
+    fn error_prev(&self, message: &str) -> CompileError {
         CompileError::Simple(self.error_at(self.token_prev.line, self.token_prev.lexeme, message))
     }
 
     /// Create an compilation error pointing at the line of the current token.
-    fn error_curr(&mut self, message: &str) -> CompileError {
+    fn error_curr(&self, message: &str) -> CompileError {
         CompileError::Simple(self.error_at(self.token_curr.line, self.token_curr.lexeme, message))
     }
 
     /// Create an compilation error pointing at a particular line and lexeme.
-    fn error_at(&mut self, line: Line, lexeme: &str, message: &str) -> String {
+    fn error_at(&self, line: Line, lexeme: &str, message: &str) -> String {
         if lexeme.is_empty() {
             format!("{line} Error at end: {message}.")
         } else {
@@ -1011,12 +1036,25 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 }
 
 /// A structure for tracking the compiler current scoped states.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Compiler<'src> {
+    fun: ObjectRef,
+    fun_type: FunctionType,
     /// A stack of local variables sorted by the order in which they are declared.
     locals: Stack<Local<'src>, { u8::MAX as usize + 1 }>,
     /// The number of "blocks" surrounding the current piece of code that we're compiling.
     scope_depth: isize,
+}
+
+impl<'src> Compiler<'src> {
+    fn new(fun: ObjectRef, fun_type: FunctionType) -> Self {
+        Self {
+            fun,
+            fun_type,
+            locals: Stack::default(),
+            scope_depth: 0,
+        }
+    }
 }
 
 /// A structure the representing local variables during compilation time.
@@ -1026,6 +1064,12 @@ struct Local<'src> {
     name: Token<'src>,
     /// The scope depth in which the local variable was declared.
     depth: isize,
+}
+
+#[derive(Debug)]
+enum FunctionType {
+    Script,
+    Function,
 }
 
 /// All precedence levels in Lox.

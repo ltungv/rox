@@ -75,10 +75,15 @@ impl VirtualMachine {
     /// Compile and execute the given source code.
     pub fn interpret(&mut self, src: &str) -> Result<(), InterpretError> {
         let mut parser = Parser::new(src, &mut self.heap);
-        let chunk = parser.compile().ok_or(InterpretError::Compile)?;
+        let object = parser.compile().ok_or(InterpretError::Compile)?;
+        let fun = object.content.as_fun().expect("Expect function object.");
+        let chunk = fun.chunk.borrow();
 
         #[cfg(debug_assertions)]
-        disassemble_chunk(&chunk, "code");
+        match &fun.name {
+            None => disassemble_chunk(&chunk, "code"),
+            Some(s) => disassemble_chunk(&chunk, s),
+        };
 
         let mut task = Task::new(self, &chunk);
         task.run().map_err(|err| {

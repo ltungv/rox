@@ -1,4 +1,4 @@
-use std::{fmt, ops, ptr::NonNull, rc::Rc};
+use std::{cell::RefCell, fmt, ops, ptr::NonNull, rc::Rc};
 
 use crate::chunk::Chunk;
 
@@ -106,7 +106,7 @@ pub struct ObjFun {
     /// Number of parameters the function has
     pub(crate) arity: u8,
     /// The bytecode chunk of this function
-    pub(crate) chunk: Chunk,
+    pub(crate) chunk: RefCell<Chunk>,
 }
 
 impl fmt::Display for ObjFun {

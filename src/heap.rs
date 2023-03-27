@@ -1,6 +1,6 @@
 use std::{collections::HashMap, ptr::NonNull, rc::Rc};
 
-use crate::object::{Object, ObjectContent, ObjectRef};
+use crate::object::{ObjFun, Object, ObjectContent, ObjectRef};
 
 /// A managed heap that cleanups memory using a tracing garbage collector.
 #[derive(Debug, Default)]
@@ -15,6 +15,11 @@ impl Heap {
     pub(crate) fn alloc_string(&mut self, s: String) -> ObjectRef {
         let content = self.take_string(s);
         self.alloc(content)
+    }
+
+    /// Allocates a new string object using the content of the input string.
+    pub(crate) fn alloc_fun(&mut self, fun: ObjFun) -> ObjectRef {
+        self.alloc(ObjectContent::Fun(fun))
     }
 
     /// Interned a string and return the object's content holding the reference.
