@@ -193,7 +193,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// }                          // STACK: [ x ] [ x ]
     /// ```
     fn var_declaration(&mut self) {
-        let global_id = self.parse_variable("Expect variable name");
+        let global_id = self.parse_variable("Expect variable name.");
         if self.advance_if(Kind::Equal) {
             // Parse the initial value assigned to the variable.
             self.expression();
@@ -201,7 +201,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             // Emit bytecodes for setting the value to 'nil' if no initial expression was found.
             self.emit(Opcode::Nil);
         }
-        self.consume(Kind::Semicolon, "Expect ';' after variable declaration");
+        self.consume(Kind::Semicolon, "Expect ';' after variable declaration.");
         self.define_variable(global_id);
     }
 
@@ -213,7 +213,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// funDecl    --> "fun" function ;
     /// ```
     fn fun_declaration(&mut self) {
-        let fun_name_const = self.parse_variable("Expect function name");
+        let fun_name_const = self.parse_variable("Expect function name.");
         // Unlike variable, function can refer to its own name when its definition. Thus, we mark
         // the function as initialized right after when it's created.
         self.mark_initialized();
@@ -236,18 +236,18 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.compilers.push(Compiler::new(fun, fun_type));
 
         self.begin_scope();
-        self.consume(Kind::LParen, "Expect '(' after function name");
+        self.consume(Kind::LParen, "Expect '(' after function name.");
         if !self.check_curr(Kind::RParen) {
             loop {
                 let fun = self.fun();
                 if fun.borrow().arity as usize == MAX_PARAMS {
-                    self.error_curr("Can't have more than 255 parameters");
+                    self.error_curr("Can't have more than 255 parameters.");
                     return;
                 }
 
                 // Treat params like variables.
                 fun.borrow_mut().arity += 1;
-                let ident_id = self.parse_variable("Expect parameter name");
+                let ident_id = self.parse_variable("Expect parameter name.");
                 self.define_variable(ident_id);
 
                 if !self.advance_if(Kind::Comma) {
@@ -255,8 +255,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                 }
             }
         }
-        self.consume(Kind::RParen, "Expect ')' after parameters");
-        self.consume(Kind::LBrace, "Expect '{' before function body");
+        self.consume(Kind::RParen, "Expect ')' after parameters.");
+        self.consume(Kind::LBrace, "Expect '{' before function body.");
         self.block();
 
         // Create a constant for the compiled function.
@@ -282,22 +282,21 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn declare_variable(&mut self) {
         let name = self.token_prev;
         let compiler = self.compiler_mut();
-        if compiler.scope_depth == 0 {
-            // Skip this step for global scope.
-            return;
-        }
-        for local in compiler.locals.into_iter().rev() {
-            if local.depth != -1 && local.depth < compiler.scope_depth {
-                // Stop if we've gone through all initialized variable in the current scope.
-                break;
+        // Skip this step for global scope.
+        if compiler.scope_depth > 0 {
+            for local in compiler.locals.into_iter().rev() {
+                if local.depth != -1 && local.depth < compiler.scope_depth {
+                    // Stop if we've gone through all initialized variable in the current scope.
+                    break;
+                }
+                if local.name == name.lexeme {
+                    // Return an error if any variable in the current scope has the same name.
+                    self.error_prev("Already a variable with this name in this scope.");
+                    return;
+                }
             }
-            if local.name == name.lexeme {
-                // Return an error if any variable in the current scope has the same name.
-                self.error_prev("Already a variable with this name in this scope");
-                return;
-            }
+            self.add_local(name)
         }
-        self.add_local(name)
     }
 
     fn add_local(&mut self, name: Token<'src>) {
@@ -310,7 +309,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             depth: -1,
         };
         if compiler.locals.push(local).is_none() {
-            self.error_prev("Too many local variables in function");
+            self.error_prev("Too many local variables in function.");
         }
     }
 
@@ -330,10 +329,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if self.compiler().scope_depth > 0 {
             // Mark declared variable as initialized
             self.mark_initialized();
-            return;
+        } else {
+            self.emit(Opcode::DefineGlobal);
+            self.emit_byte(global_id);
         }
-        self.emit(Opcode::DefineGlobal);
-        self.emit_byte(global_id);
     }
 
     /// A local variable is initialized if its depth is not -1.
@@ -362,15 +361,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// correct value.
     fn mark_initialized(&mut self) {
         let compiler = self.compiler_mut();
-        if compiler.scope_depth == 0 {
-            // Do nothing if we are in the global scope.
-            return;
+        // Do nothing if we are in the global scope.
+        if compiler.scope_depth > 0 {
+            let local = compiler
+                .locals
+                .top_mut(0)
+                .expect("A local varialbe should have been declared.");
+            local.depth = compiler.scope_depth;
         }
-        let local = compiler
-            .locals
-            .top_mut(0)
-            .expect("A local varialbe should have been declared");
-        local.depth = compiler.scope_depth;
     }
 
     /// Parse a statement assuming that we're at the start of it. All lines of code must be
@@ -418,7 +416,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         while !self.check_curr(Kind::RBrace) && !self.check_curr(Kind::Eof) {
             self.declaration();
         }
-        self.consume(Kind::RBrace, "Expect '}' after block");
+        self.consume(Kind::RBrace, "Expect '}' after block.");
     }
 
     /// Parse a print statement assuming that we've already consumed the 'print' keyword.
@@ -430,7 +428,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// ```
     fn print_statement(&mut self) {
         self.expression();
-        self.consume(Kind::Semicolon, "Expect ';' after value");
+        self.consume(Kind::Semicolon, "Expect ';' after value.");
         self.emit(Opcode::Print);
     }
 
@@ -443,9 +441,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// ```
     fn if_statement(&mut self) {
         // Conditional part.
-        self.consume(Kind::LParen, "Expect '(' after 'if'");
+        self.consume(Kind::LParen, "Expect '(' after 'if'.");
         self.expression();
-        self.consume(Kind::RParen, "Expect ')' after condition");
+        self.consume(Kind::RParen, "Expect ')' after condition.");
         // Jump over the then statement if condition is false.
         let jump_skip_then = self.emit_jump(Opcode::JumpIfFalse);
         // Pop the temporary value on stack created by the conditional expression.
@@ -477,9 +475,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // Track the start of the loop where we can jump back to.
         let loop_start = self.fun().borrow().chunk.instructions.len();
         // Conditional part.
-        self.consume(Kind::LParen, "Expect '(' after 'while'");
+        self.consume(Kind::LParen, "Expect '(' after 'while'.");
         self.expression();
-        self.consume(Kind::RParen, "Expect ')' after condition");
+        self.consume(Kind::RParen, "Expect ')' after condition.");
         // Jump over the loop body if condition is false.
         let jump_exit = self.emit_jump(Opcode::JumpIfFalse);
         // Pop the temporary value on stack created by the conditional expression.
@@ -505,7 +503,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // A for statement create its own scope.
         self.begin_scope();
         // Loop's initializer.
-        self.consume(Kind::LParen, "Expect '(' after 'for'");
+        self.consume(Kind::LParen, "Expect '(' after 'for'.");
         if self.advance_if(Kind::Semicolon) {
             // Empty initializer. Ignored.
         } else if self.advance_if(Kind::Var) {
@@ -521,7 +519,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         } else {
             // Conditional expression.
             self.expression();
-            self.consume(Kind::Semicolon, "Expect ';' after loop condition");
+            self.consume(Kind::Semicolon, "Expect ';' after loop condition.");
             // Jump out of the loop.
             let jump_exit = self.emit_jump(Opcode::JumpIfFalse);
             // Clear out the result of the expression.
@@ -541,7 +539,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             // Parse expression and ignore its result at runtime.
             self.expression();
             self.emit(Opcode::Pop);
-            self.consume(Kind::RParen, "Expect ')' after for clauses");
+            self.consume(Kind::RParen, "Expect ')' after for clauses.");
             // Jump back the the start of the loop so we can start a new iteration.
             self.emit_loop(loop_start);
             // Patch jump to right before loop's body.
@@ -568,14 +566,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn return_statement(&mut self) {
         if self.compiler().fun_type == FunctionType::Script {
-            self.error_prev("Can't return from top-level code");
+            self.error_prev("Can't return from top-level code.");
             return;
         }
         if self.advance_if(Kind::Semicolon) {
             self.emit_return();
         } else {
             self.expression();
-            self.consume(Kind::Semicolon, "Expect ';' after return value");
+            self.consume(Kind::Semicolon, "Expect ';' after return value.");
             self.emit(Opcode::Ret);
         }
     }
@@ -589,7 +587,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// ```
     fn expression_statement(&mut self) {
         self.expression();
-        self.consume(Kind::Semicolon, "Expect ';' after expression");
+        self.consume(Kind::Semicolon, "Expect ';' after expression.");
         self.emit(Opcode::Pop);
     }
 
@@ -641,7 +639,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // The assignment target is wrong, if the current expression can be assigned to but we
         // haven't consumed the '=' after all the steps.
         if can_assign && self.advance_if(Kind::Equal) {
-            self.error_prev("Invalid assignment target");
+            self.error_prev("Invalid assignment target.");
         }
     }
 
@@ -654,7 +652,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             Kind::String => self.string(),
             Kind::Number => self.number(),
             Kind::True | Kind::False | Kind::Nil => self.literal(),
-            _ => self.error_prev("Expect expression"),
+            _ => self.error_prev("Expect expression."),
         }
     }
 
@@ -674,7 +672,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             | Kind::GreaterEqual
             | Kind::Less
             | Kind::LessEqual => self.binary(),
-            _ => self.error_prev("Expect expression"),
+            _ => self.error_prev("Expect expression."),
         }
     }
 
@@ -690,7 +688,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// ```
     fn grouping(&mut self) {
         self.expression();
-        self.consume(Kind::RParen, "Expect ')' after expression");
+        self.consume(Kind::RParen, "Expect ')' after expression.");
     }
 
     /// Parse a unary operation assuming that the operator token has been consumed.
@@ -797,17 +795,16 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             loop {
                 self.expression();
                 if arg_count == MAX_PARAMS {
-                    self.error_prev("Can't have more than 255 arguments");
-                    return arg_count as u8;
+                    self.error_prev("Can't have more than 255 arguments.");
+                    break;
                 }
-
                 arg_count += 1;
                 if !self.advance_if(Kind::Comma) {
                     break;
                 }
             }
         }
-        self.consume(Kind::RParen, "Expect ')' after arguments");
+        self.consume(Kind::RParen, "Expect ')' after arguments.");
         arg_count as u8
     }
 
@@ -837,7 +834,6 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             }
             Some(id) => (id, Opcode::GetLocal, Opcode::SetLocal),
         };
-
         if can_assign && self.advance_if(Kind::Equal) {
             // The LHS can be used as an assignment target.
             self.expression();
@@ -857,9 +853,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         for (id, local) in compiler.locals.into_iter().enumerate().rev() {
             if local.name == name.lexeme {
                 if local.depth == -1 {
-                    // Found a variable used in its own initializer.
-                    self.error_prev("Can't read local variable in its own initializer");
-                    return Some(id as u8);
+                    self.error_prev("Can't read local variable in its own initializer.");
                 }
                 // Found a valid value for the variable.
                 return Some(id as u8);
@@ -944,7 +938,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // We do +2 to adjust for the 2 offset bytes.
         let jump = self.fun().borrow().chunk.instructions.len() - start + 2;
         if jump > u16::MAX.into() {
-            self.error_prev("Loop body too large");
+            self.error_prev("Loop body too large.");
         } else {
             let hi = (jump >> 8) & 0xff;
             let lo = jump & 0xff;
@@ -971,7 +965,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // We do -2 to adjust for the 2 offset bytes.
         let jump = self.fun().borrow().chunk.instructions.len() - offset - 2;
         if jump > u16::MAX.into() {
-            self.error_prev("Too much code to jump over");
+            self.error_prev("Too much code to jump over.");
         } else {
             let hi = (jump >> 8) & 0xff;
             let lo = jump & 0xff;
@@ -985,7 +979,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let constant_id = self.fun().borrow_mut().chunk.write_constant(value);
         match constant_id {
             None => {
-                self.error_prev("Too many constants in one chunk");
+                self.error_prev("Too many constants in one chunk.");
                 0
             }
             Some(id) => id as u8,
@@ -1070,11 +1064,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Move to the next token iff the current token kind matches the given token kind.
     fn advance_if(&mut self, kind: Kind) -> bool {
-        if !self.check_curr(kind) {
-            return false;
+        let matched = self.check_curr(kind);
+        if matched {
+            self.advance();
         }
-        self.advance();
-        true
+        matched
     }
 
     /// Check if the current token has the given `token_kind`. Return an error with a custom
@@ -1115,9 +1109,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.had_error = true;
         self.panicking = true;
         if lexeme.is_empty() {
-            eprintln!("{line} Error at end: {message}.");
+            eprintln!("{line} Error at end: {message}");
         } else {
-            eprintln!("{line} Error at '{lexeme}': {message}.");
+            eprintln!("{line} Error at '{lexeme}': {message}");
         }
     }
 }
