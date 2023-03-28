@@ -27,10 +27,9 @@ impl PartialEq for ObjectRef {
     fn eq(&self, other: &Self) -> bool {
         match (&self.content, &other.content) {
             (ObjectContent::String(s1), ObjectContent::String(s2)) => Rc::ptr_eq(s1, s2),
+            (ObjectContent::Closure(_), ObjectContent::Closure(_)) => self.0.eq(&other.0),
             (ObjectContent::Fun(_), ObjectContent::Fun(_)) => self.0.eq(&other.0),
-            (ObjectContent::NativeFun(f1), ObjectContent::NativeFun(f2)) => {
-                Rc::ptr_eq(&f1.name, &f2.name)
-            }
+            (ObjectContent::NativeFun(_), ObjectContent::NativeFun(_)) => self.0.eq(&other.0),
             _ => false,
         }
     }
@@ -62,7 +61,7 @@ pub(crate) enum ObjectContent {
     /// A heap allocated string
     String(Rc<str>),
     // /// A closure that can captured surrounding variables
-    // Closure(Gc<ObjClosure>),
+    Closure(RefCell<ObjClosure>),
     /// A function object
     Fun(RefCell<ObjFun>),
     /// A native function object
@@ -76,6 +75,7 @@ pub(crate) enum ObjectContent {
 }
 
 impl ObjectContent {
+    /// Cast the object to a string reference.
     pub(crate) fn as_string(&self) -> Result<Rc<str>, ObjectError> {
         match self {
             Self::String(s) => Ok(Rc::clone(s)),
@@ -83,6 +83,15 @@ impl ObjectContent {
         }
     }
 
+    /// Cast the object to a closure reference.
+    pub(crate) fn as_closure(&self) -> Result<&RefCell<ObjClosure>, ObjectError> {
+        match self {
+            Self::Closure(c) => Ok(c),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
+
+    /// Cast the object to a function reference.
     pub(crate) fn as_fun(&self) -> Result<&RefCell<ObjFun>, ObjectError> {
         match self {
             Self::Fun(f) => Ok(f),
@@ -95,7 +104,7 @@ impl fmt::Display for ObjectContent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         match self {
             Self::String(s) => write!(f, "{s}"),
-            // Self::Closure(c) => write!(f, "{c}"),
+            Self::Closure(c) => write!(f, "{}", c.borrow()),
             Self::Fun(fun) => write!(f, "{}", fun.borrow()),
             Self::NativeFun(fun) => write!(f, "{fun}"),
             // Self::Class(c) => write!(f, "{}", c.borrow()),
@@ -105,7 +114,20 @@ impl fmt::Display for ObjectContent {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
+pub struct ObjClosure {
+    /// The name of the function
+    pub(crate) fun: ObjectRef,
+}
+
+impl fmt::Display for ObjClosure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        let fun = self.fun.content.as_fun().expect("Expect function object.");
+        write!(f, "{}", fun.borrow())
+    }
+}
+
+#[derive(Debug)]
 pub struct ObjFun {
     /// The name of the function
     pub(crate) name: Option<Rc<str>>,
@@ -116,9 +138,9 @@ pub struct ObjFun {
 }
 
 impl ObjFun {
-    pub(crate) fn with_name(name: Rc<str>) -> Self {
+    pub(crate) fn new(name: Option<Rc<str>>) -> Self {
         Self {
-            name: Some(name),
+            name,
             arity: 0,
             chunk: Chunk::default(),
         }
@@ -136,8 +158,6 @@ impl fmt::Display for ObjFun {
 
 /// A native function
 pub(crate) struct NativeFun {
-    /// Function's name
-    pub(crate) name: Rc<str>,
     /// Number of parameters
     pub(crate) arity: u8,
     /// Native function reference

@@ -112,6 +112,12 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         }
         Opcode::Loop => disassemble_jump(chunk, offset, JumpDirection::Backward, "OP_LOOP"),
         Opcode::Call => disassemble_byte(chunk, offset, "OP_CALL"),
+        Opcode::Closure => {
+            let constant_id = chunk.instructions[offset + 1] as usize;
+            let constant = &chunk.constants[constant_id];
+            println!("{:-16} {constant_id:4} {constant}", "OP_CLOSURE");
+            offset + 1
+        }
         Opcode::Ret => disassemble_simple(offset, "OP_RET"),
         _ => unreachable!(),
     }

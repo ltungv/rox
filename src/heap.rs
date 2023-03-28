@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, ptr::NonNull, rc::Rc};
 
-use crate::object::{NativeFun, ObjFun, Object, ObjectContent, ObjectRef};
+use crate::object::{NativeFun, ObjClosure, ObjFun, Object, ObjectContent, ObjectRef};
 
 /// A managed heap that cleanups memory using a tracing garbage collector.
 #[derive(Debug, Default)]
@@ -17,12 +17,17 @@ impl Heap {
         self.alloc(ObjectContent::String(content))
     }
 
-    /// Allocates a new string object using the content of the input string.
+    /// Allocates a new closure object.
+    pub(crate) fn alloc_closure(&mut self, closure: ObjClosure) -> ObjectRef {
+        self.alloc(ObjectContent::Closure(RefCell::new(closure)))
+    }
+
+    /// Allocates a new function object.
     pub(crate) fn alloc_fun(&mut self, fun: ObjFun) -> ObjectRef {
         self.alloc(ObjectContent::Fun(RefCell::new(fun)))
     }
 
-    /// Allocates a new string object using the content of the input string.
+    /// Allocates a new native function object.
     pub(crate) fn alloc_native_fun(&mut self, native_fun: NativeFun) -> ObjectRef {
         self.alloc(ObjectContent::NativeFun(native_fun))
     }

@@ -82,7 +82,7 @@ pub(crate) struct Parser<'src, 'vm> {
 impl<'src, 'vm> Parser<'src, 'vm> {
     /// Create a new parser that reads the given source string.
     pub(crate) fn new(src: &'src str, heap: &'vm mut Heap) -> Self {
-        let fun = heap.alloc_fun(ObjFun::default());
+        let fun = heap.alloc_fun(ObjFun::new(None));
         Self {
             had_error: false,
             panicking: false,
@@ -232,7 +232,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn function(&mut self, fun_type: FunctionType) {
         // Interned the function name and allocate a new function.
         let fun_name = self.heap.take_string(String::from(self.token_prev.lexeme));
-        let fun = self.heap.alloc_fun(ObjFun::with_name(fun_name));
+        let fun = self.heap.alloc_fun(ObjFun::new(Some(fun_name)));
         self.compilers.push(Compiler::new(fun, fun_type));
 
         self.begin_scope();
@@ -261,7 +261,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
         // Create a constant for the compiled function.
         let compiler = self.take();
-        self.emit_constant(Value::Object(compiler.fun));
+        let constant_id = self.make_constant(Value::Object(compiler.fun));
+        self.emit(Opcode::Closure);
+        self.emit_byte(constant_id);
     }
 
     /// Parse the identifier and declare it as the variable name.
