@@ -45,7 +45,7 @@ impl Chunk {
         for (i, run_length) in self.line_run_lengths.iter().enumerate() {
             total_run_length += run_length;
             if total_run_length > offset {
-                return *self.lines.get(i).unwrap();
+                return *self.lines.get(i).expect("Expect a valid line.");
             }
         }
         Line::default()
@@ -90,6 +90,8 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::GetGlobal => disassemble_constant(chunk, offset, "OP_GET_GLOBAL"),
         Opcode::SetGlobal => disassemble_constant(chunk, offset, "OP_SET_GLOBAL"),
         Opcode::DefineGlobal => disassemble_constant(chunk, offset, "OP_DEFINE_GLOBAL"),
+        Opcode::GetUpvalue => disassemble_byte(chunk, offset, "OP_GET_UPVALUE"),
+        Opcode::SetUpvalue => disassemble_byte(chunk, offset, "OP_SET_UPVALUE"),
         Opcode::Print => disassemble_simple(offset, "OP_PRINT"),
         Opcode::NE => disassemble_simple(offset, "OP_NE"),
         Opcode::EQ => disassemble_simple(offset, "OP_EQ"),
@@ -113,10 +115,21 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::Loop => disassemble_jump(chunk, offset, JumpDirection::Backward, "OP_LOOP"),
         Opcode::Call => disassemble_byte(chunk, offset, "OP_CALL"),
         Opcode::Closure => {
-            let constant_id = chunk.instructions[offset + 1] as usize;
+            let mut offset = offset + 1;
+            let constant_id = chunk.instructions[offset] as usize;
             let constant = &chunk.constants[constant_id];
             println!("{:-16} {constant_id:4} {constant}", "OP_CLOSURE");
-            offset + 1
+            let object = constant.as_object().expect("Expect an object.");
+            let fun = object.content.as_fun().expect("Expect a function object.");
+            let upvalue_count = fun.borrow().upvalue_count;
+            for _ in 0..upvalue_count {
+                let is_local = chunk.instructions[offset + 1] == 1;
+                let index = chunk.instructions[offset + 2];
+                let upvalue_type = if is_local { "local" } else { "upvalue" };
+                println!("{offset:04}    |                     {upvalue_type} {index}");
+                offset += 2;
+            }
+            offset
         }
         Opcode::Ret => disassemble_simple(offset, "OP_RET"),
         _ => unreachable!(),

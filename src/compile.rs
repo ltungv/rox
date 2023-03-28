@@ -108,13 +108,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn take(&mut self) -> Compiler<'src> {
         self.emit_return();
         let compiler = self.compilers.pop().expect("Invalid state.");
+        let fun = compiler.fun();
+        fun.borrow_mut().upvalue_count = compiler.upvalues.len() as u8;
         #[cfg(debug_assertions)]
         {
-            let fun = compiler
-                .fun
-                .content
-                .as_fun()
-                .expect("Expect function object.");
             match &fun.borrow().name {
                 None => disassemble_chunk(&fun.borrow().chunk, "code"),
                 Some(s) => disassemble_chunk(&fun.borrow().chunk, s),
@@ -239,7 +236,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.consume(Kind::LParen, "Expect '(' after function name.");
         if !self.check_curr(Kind::RParen) {
             loop {
-                let fun = self.fun();
+                let fun = self.fun(0);
                 if fun.borrow().arity as usize == MAX_PARAMS {
                     self.error_curr("Can't have more than 255 parameters.");
                     return;
@@ -264,13 +261,22 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let constant_id = self.make_constant(Value::Object(compiler.fun));
         self.emit(Opcode::Closure);
         self.emit_byte(constant_id);
+
+        for upvalue in &compiler.upvalues {
+            if upvalue.is_local {
+                self.emit_byte(1);
+            } else {
+                self.emit_byte(0);
+            }
+            self.emit_byte(upvalue.index);
+        }
     }
 
     /// Parse the identifier and declare it as the variable name.
     fn parse_variable(&mut self, message: &str) -> u8 {
         self.consume(Kind::Ident, message);
         self.declare_variable();
-        if self.compiler().scope_depth > 0 {
+        if self.compiler(0).scope_depth > 0 {
             // Return a dummy constant id if we're in a local scope. Local variable don't
             // need to store their names as constants because we access them at runtime
             // through the stack index.
@@ -283,7 +289,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Try to declare a local variable.
     fn declare_variable(&mut self) {
         let name = self.token_prev;
-        let compiler = self.compiler_mut();
+        let compiler = self.compiler_mut(0);
         // Skip this step for global scope.
         if compiler.scope_depth > 0 {
             for local in compiler.locals.into_iter().rev() {
@@ -302,7 +308,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn add_local(&mut self, name: Token<'src>) {
-        let compiler = self.compiler_mut();
+        let compiler = self.compiler_mut(0);
         // When a local variable is first declared, it is marked as "uninitialized" by setting
         // depth=-1. Once we finish parsing the variable initializer, we set depth back to its
         // correct scope depth.
@@ -328,7 +334,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // value. We have already executed the code for the variable’s initializer (or the
         // implicit nil), and that value is sitting right on top of the stack as the only
         // remaining temporary.
-        if self.compiler().scope_depth > 0 {
+        if self.compiler(0).scope_depth > 0 {
             // Mark declared variable as initialized
             self.mark_initialized();
         } else {
@@ -362,7 +368,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// variable declaration has been parsed, we went back to the local to set its depth to the
     /// correct value.
     fn mark_initialized(&mut self) {
-        let compiler = self.compiler_mut();
+        let compiler = self.compiler_mut(0);
         // Do nothing if we are in the global scope.
         if compiler.scope_depth > 0 {
             let local = compiler
@@ -475,7 +481,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// ```
     fn while_statement(&mut self) {
         // Track the start of the loop where we can jump back to.
-        let loop_start = self.fun().borrow().chunk.instructions.len();
+        let loop_start = self.fun(0).borrow().chunk.instructions.len();
         // Conditional part.
         self.consume(Kind::LParen, "Expect '(' after 'while'.");
         self.expression();
@@ -514,7 +520,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.expression_statement();
         }
         // Loop's condition.
-        let loop_start = self.fun().borrow().chunk.instructions.len();
+        let loop_start = self.fun(0).borrow().chunk.instructions.len();
         let jump_exit = if self.advance_if(Kind::Semicolon) {
             // The conditional part is empty, so we don't have to emit a jump instruction.
             None
@@ -537,7 +543,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             // executed first.
             let jump_to_body = self.emit_jump(Opcode::Jump);
             // Keep track of the incrementer's starting position.
-            let increment_start = self.fun().borrow().chunk.instructions.len();
+            let increment_start = self.fun(0).borrow().chunk.instructions.len();
             // Parse expression and ignore its result at runtime.
             self.expression();
             self.emit(Opcode::Pop);
@@ -566,14 +572,23 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.end_scope();
     }
 
+    /// Parse a return statement assuming that we've consumed the `return` keyword.
+    ///
+    /// ## Grammar
+    ///
+    /// ```text
+    /// returnStmt --> "return" expr? ";" ;
+    /// ```
     fn return_statement(&mut self) {
-        if self.compiler().fun_type == FunctionType::Script {
+        if self.compiler(0).fun_type == FunctionType::Script {
             self.error_prev("Can't return from top-level code.");
             return;
         }
+        // Empty return put nil as the value of the function.
         if self.advance_if(Kind::Semicolon) {
             self.emit_return();
         } else {
+            // Returned the value of an expression.
             self.expression();
             self.consume(Kind::Semicolon, "Expect ';' after return value.");
             self.emit(Opcode::Ret);
@@ -826,16 +841,21 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Emit the bytecodes for loading a variable with a particular name.
     fn named_variable(&mut self, name: Token<'_>, can_assign: bool) {
-        // Get the constant that holds our identifier.
-        let (arg, op_get, op_set) = match self.resolve_local(name) {
-            None => {
-                // Cannot resolve to a local variable, so we assume that the name references a
-                // global variable.
+        let (arg, op_get, op_set) = self
+            // Find value in local frame.
+            .resolve_local(name, 0)
+            .map(|local| (local, Opcode::GetLocal, Opcode::SetLocal))
+            .or_else(|| {
+                // Find value in one frame above.
+                self.resolve_upvalue(name, 0)
+                    .map(|upval| (upval, Opcode::GetUpvalue, Opcode::SetUpvalue))
+            })
+            .unwrap_or_else(|| {
+                // Find value in globals table.
                 let id = self.identifier_constant(name);
                 (id, Opcode::GetGlobal, Opcode::SetGlobal)
-            }
-            Some(id) => (id, Opcode::GetLocal, Opcode::SetLocal),
-        };
+            });
+
         if can_assign && self.advance_if(Kind::Equal) {
             // The LHS can be used as an assignment target.
             self.expression();
@@ -849,19 +869,66 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     /// Find the stack index the hold the local variable with the given name.
-    fn resolve_local(&mut self, name: Token<'_>) -> Option<u8> {
-        let compiler = self.compiler();
-        // Walk up from low scope to high scope.
+    fn resolve_local(&mut self, name: Token<'_>, height: usize) -> Option<u8> {
+        println!("resolve local ({height}) '{name:?}'");
+        if height >= self.compilers.len() {
+            // There's no compiler at this height.
+            return None;
+        }
+        // Walk up from low scope to high scope to find a local with the given name.
+        let compiler = self.compiler(height);
         for (id, local) in compiler.locals.into_iter().enumerate().rev() {
             if local.name == name.lexeme {
                 if local.depth == -1 {
                     self.error_prev("Can't read local variable in its own initializer.");
                 }
+                println!("found local ({height}) '{name:?}'");
                 // Found a valid value for the variable.
                 return Some(id as u8);
             }
         }
         None
+    }
+
+    /// Get the index of an upvalue within the current chunk.
+    ///
+    /// An upvalue refers to a local variable in an enclosing function. Every closure maintains
+    /// an array of upvalues, one for each surrounding local variable that the closure uses.
+    fn resolve_upvalue(&mut self, name: Token<'_>, height: usize) -> Option<u8> {
+        println!("resolve upval ({height}) '{name:?}'");
+        if height >= self.compilers.len() {
+            // There's no compiler at this height
+            return None;
+        }
+        // Find a matching local variable in the enclosing scope.
+        if let Some(local) = self.resolve_local(name, height + 1) {
+            return Some(self.add_upvalue(height, local, true));
+        }
+        // Find a matching upvalue in the enclosing
+        if let Some(upvalue) = self.resolve_upvalue(name, height + 1) {
+            println!("found upval ({height}) '{name:?}'");
+            return Some(self.add_upvalue(height, upvalue, false));
+        }
+        None
+    }
+
+    /// An an upvalue to the chunk. If we reference a value that has been captured, the index of
+    /// corresponding upvalue is returned instead of adding a new upvalue.
+    fn add_upvalue(&mut self, height: usize, index: u8, is_local: bool) -> u8 {
+        // Find an upvalue that references the same index.
+        for (upval_index, upval) in self.compiler(height).upvalues.into_iter().enumerate() {
+            if upval.index == index && upval.is_local == is_local {
+                return upval_index as u8;
+            }
+        }
+        // Add the upvalue.
+        let upval = Upvalue { is_local, index };
+        if let Some(upval_index) = self.compiler_mut(height).upvalues.push(upval) {
+            upval_index as u8
+        } else {
+            self.error_prev("Too many closure variables in function.");
+            0
+        }
     }
 
     /// Create a string literal and emit bytecodes to load it value.
@@ -917,13 +984,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Write the byte representing the given opcode into the current compiling chunk.
     fn emit(&mut self, opcode: Opcode) {
         let line = self.token_prev.line;
-        self.fun().borrow_mut().chunk.write(opcode, line);
+        self.fun(0).borrow_mut().chunk.write(opcode, line);
     }
 
     /// Write the byte into the current compiling chunk.
     fn emit_byte(&mut self, byte: u8) {
         let line = self.token_prev.line;
-        self.fun().borrow_mut().chunk.write_byte(byte, line);
+        self.fun(0).borrow_mut().chunk.write_byte(byte, line);
     }
 
     /// Emit a jump instruction along with a 16-byte placeholder for the offset.
@@ -931,14 +998,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit(opcode);
         self.emit_byte(0xff);
         self.emit_byte(0xff);
-        self.fun().borrow().chunk.instructions.len() - 2
+        self.fun(0).borrow().chunk.instructions.len() - 2
     }
 
     /// Emit a loop instruction along with a 16-byte placeholder for the offset.
     fn emit_loop(&mut self, start: usize) {
         self.emit(Opcode::Loop);
         // We do +2 to adjust for the 2 offset bytes.
-        let jump = self.fun().borrow().chunk.instructions.len() - start + 2;
+        let jump = self.fun(0).borrow().chunk.instructions.len() - start + 2;
         if jump > u16::MAX.into() {
             self.error_prev("Loop body too large.");
         } else {
@@ -965,20 +1032,20 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn patch_jump(&mut self, offset: usize) {
         // We do -2 to adjust for the 2 offset bytes.
-        let jump = self.fun().borrow().chunk.instructions.len() - offset - 2;
+        let jump = self.fun(0).borrow().chunk.instructions.len() - offset - 2;
         if jump > u16::MAX.into() {
             self.error_prev("Too much code to jump over.");
         } else {
             let hi = (jump >> 8) & 0xff;
             let lo = jump & 0xff;
-            self.fun().borrow_mut().chunk.instructions[offset] = hi as u8;
-            self.fun().borrow_mut().chunk.instructions[offset + 1] = lo as u8;
+            self.fun(0).borrow_mut().chunk.instructions[offset] = hi as u8;
+            self.fun(0).borrow_mut().chunk.instructions[offset + 1] = lo as u8;
         }
     }
 
     /// Write a constant to the currently compiling chunk.
     fn make_constant(&mut self, value: Value) -> u8 {
-        let constant_id = self.fun().borrow_mut().chunk.write_constant(value);
+        let constant_id = self.fun(0).borrow_mut().chunk.write_constant(value);
         match constant_id {
             None => {
                 self.error_prev("Too many constants in one chunk.");
@@ -991,34 +1058,36 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Start a new scope.
     fn begin_scope(&mut self) {
         // Update the current scope.
-        self.compiler_mut().scope_depth += 1;
+        self.compiler_mut(0).scope_depth += 1;
     }
 
     /// End the current scope
     fn end_scope(&mut self) {
         // Update the current scope.
-        self.compiler_mut().scope_depth -= 1;
-        while let Some(local) = self.compiler().locals.top(0) {
+        self.compiler_mut(0).scope_depth -= 1;
+        while let Some(local) = self.compiler(0).locals.top(0) {
             // End once we reach the current scope.
-            if local.depth <= self.compiler().scope_depth {
+            if local.depth <= self.compiler(0).scope_depth {
                 break;
             }
             // Variables at the scope bellow get popped out of the stack.
             self.emit(Opcode::Pop);
-            self.compiler_mut().locals.pop();
+            self.compiler_mut(0).locals.pop();
         }
     }
 
-    fn fun(&self) -> &RefCell<ObjFun> {
-        self.compiler().fun()
+    fn fun(&self, height: usize) -> &RefCell<ObjFun> {
+        self.compiler(height).fun()
     }
 
-    fn compiler(&self) -> &Compiler<'src> {
-        self.compilers.last().expect("Expect a compiler.")
+    fn compiler(&self, height: usize) -> &Compiler<'src> {
+        let total = self.compilers.len();
+        &self.compilers[total - height - 1]
     }
 
-    fn compiler_mut(&mut self) -> &mut Compiler<'src> {
-        self.compilers.last_mut().expect("Expect a compiler.")
+    fn compiler_mut(&mut self, height: usize) -> &mut Compiler<'src> {
+        let total = self.compilers.len();
+        &mut self.compilers[total - height - 1]
     }
 
     /// Synchronize the parser to a normal state where we can continue parsing
@@ -1123,10 +1192,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 struct Compiler<'src> {
     fun: ObjectRef,
     fun_type: FunctionType,
-    /// A stack of local variables sorted by the order in which they are declared.
-    locals: Stack<Local<'src>, { u8::MAX as usize + 1 }>,
     /// The number of "blocks" surrounding the current piece of code that we're compiling.
     scope_depth: isize,
+    /// A stack of local variables sorted by the order in which they are declared.
+    locals: Stack<Local<'src>, { u8::MAX as usize + 1 }>,
+    /// A stack of local variables sorted by the order in which they are declared.
+    upvalues: Stack<Upvalue, { u8::MAX as usize + 1 }>,
 }
 
 impl<'src> Compiler<'src> {
@@ -1136,14 +1207,27 @@ impl<'src> Compiler<'src> {
         Self {
             fun,
             fun_type,
-            locals,
             scope_depth: 0,
+            locals,
+            upvalues: Stack::default(),
         }
     }
 
     fn fun(&self) -> &RefCell<ObjFun> {
         self.fun.content.as_fun().expect("Expect function object.")
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FunctionType {
+    Script,
+    Function,
+}
+
+#[derive(Debug)]
+struct Upvalue {
+    is_local: bool,
+    index: u8,
 }
 
 /// A structure the representing local variables during compilation time.
@@ -1153,12 +1237,6 @@ struct Local<'src> {
     name: &'src str,
     /// The scope depth in which the local variable was declared.
     depth: isize,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum FunctionType {
-    Script,
-    Function,
 }
 
 /// All precedence levels in Lox.

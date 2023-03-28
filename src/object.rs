@@ -133,6 +133,8 @@ pub struct ObjFun {
     pub(crate) name: Option<Rc<str>>,
     /// Number of parameters the function has
     pub(crate) arity: u8,
+    /// Number of upvalues captured by the function
+    pub(crate) upvalue_count: u8,
     /// The bytecode chunk of this function
     pub(crate) chunk: Chunk,
 }
@@ -142,6 +144,7 @@ impl ObjFun {
         Self {
             name,
             arity: 0,
+            upvalue_count: 0,
             chunk: Chunk::default(),
         }
     }

@@ -81,7 +81,8 @@ impl VirtualMachine {
             globals: HashMap::default(),
             heap: Heap::default(),
         };
-        vm.define_native("clock", 0, clock_native).unwrap();
+        vm.define_native("clock", 0, clock_native)
+            .expect("Native function must be defined.");
         vm
     }
 }
