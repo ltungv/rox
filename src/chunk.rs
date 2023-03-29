@@ -8,8 +8,7 @@ use crate::vm::JumpDirection;
 pub(crate) struct Chunk {
     pub(crate) constants: Vec<Value>,
     pub(crate) instructions: Vec<u8>,
-    pub(crate) lines: Vec<Line>,
-    pub(crate) line_run_lengths: Vec<usize>,
+    lines: Vec<RunLength<Line>>,
 }
 
 impl Chunk {
@@ -21,17 +20,7 @@ impl Chunk {
     /// Write an arbitrarily byte into the chunk.
     pub(crate) fn write_byte(&mut self, byte: u8, line: Line) {
         self.instructions.push(byte);
-        match self.lines.last() {
-            Some(n) if *n == line => {
-                if let Some(run_length) = self.line_run_lengths.last_mut() {
-                    *run_length += 1
-                }
-            }
-            _ => {
-                self.lines.push(line);
-                self.line_run_lengths.push(1);
-            }
-        }
+        self.add_line(line);
     }
 
     /// Write a constant into the chunk.
@@ -41,15 +30,35 @@ impl Chunk {
     }
 
     /// Get the line information of the bytecode at a specific offset.
+    pub(crate) fn add_line(&mut self, line: Line) {
+        match self.lines.last_mut() {
+            Some(last_line) if last_line.data == line => last_line.length += 1,
+            _ => self.lines.push(RunLength::new(line)),
+        }
+    }
+
+    /// Get the line information of the bytecode at a specific offset.
     pub(crate) fn get_line(&self, offset: usize) -> Line {
-        let mut total_run_length = 0;
-        for (i, run_length) in self.line_run_lengths.iter().enumerate() {
-            total_run_length += run_length;
-            if total_run_length > offset {
-                return *self.lines.get(i).expect("Expect a valid line.");
+        let mut length = 0;
+        for line in self.lines.iter() {
+            length += line.length;
+            if length > offset {
+                return line.data;
             }
         }
         Line::default()
+    }
+}
+
+#[derive(Debug)]
+struct RunLength<T> {
+    data: T,
+    length: usize,
+}
+
+impl<T> RunLength<T> {
+    fn new(data: T) -> Self {
+        Self { data, length: 1 }
     }
 }
 

@@ -469,7 +469,7 @@ impl<'vm> Task<'vm> {
     fn call_value(&mut self, callee: Value, argc: u8) -> Result<(), RuntimeError> {
         match callee {
             Value::Object(o) => self.call_object(o, argc),
-            _ => Err(RuntimeError::Value(ValueError::InvalidUse(
+            _ => Err(RuntimeError::Value(ValueError::BadOperand(
                 "Can only call functions and classes.",
             ))),
         }
@@ -479,7 +479,7 @@ impl<'vm> Task<'vm> {
         match &callee.content {
             ObjectContent::Closure(_) => self.call_closure(callee, argc),
             ObjectContent::NativeFun(f) => self.call_native(f, argc),
-            _ => Err(RuntimeError::Value(ValueError::InvalidUse(
+            _ => Err(RuntimeError::Value(ValueError::BadOperand(
                 "Can only call functions and classes.",
             ))),
         }
@@ -630,28 +630,28 @@ impl<'vm> Task<'vm> {
     fn gt(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = lhs.deref().gt(&rhs)?;
+        *lhs = Value::Bool(lhs.deref().gt(&rhs)?);
         Ok(())
     }
 
     fn ge(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = lhs.deref().ge(&rhs)?;
+        *lhs = Value::Bool(lhs.deref().ge(&rhs)?);
         Ok(())
     }
 
     fn lt(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = lhs.deref().lt(&rhs)?;
+        *lhs = Value::Bool(lhs.deref().lt(&rhs)?);
         Ok(())
     }
 
     fn le(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = lhs.deref().le(&rhs)?;
+        *lhs = Value::Bool(lhs.deref().le(&rhs)?);
         Ok(())
     }
 
@@ -664,13 +664,13 @@ impl<'vm> Task<'vm> {
             // Operations on objects might allocate a new one.
             (Value::Object(o1), Value::Object(o2)) => match (&o1.content, &o2.content) {
                 (ObjectContent::String(s1), ObjectContent::String(s2)) => {
-                    let s1 = String::from(s1.as_ref());
-                    let s2 = String::from(s2.as_ref());
-                    let s = s1 + &s2;
+                    let mut s = String::with_capacity(s1.len() + s1.len());
+                    s.push_str(s1.as_ref());
+                    s.push_str(s2.as_ref());
                     Value::Object(self.vm.heap.alloc_string(s))
                 }
                 _ => {
-                    return Err(RuntimeError::Value(ValueError::InvalidUse(
+                    return Err(RuntimeError::Value(ValueError::BadOperand(
                         "Operands must be two numbers or two strings.",
                     )))
                 }

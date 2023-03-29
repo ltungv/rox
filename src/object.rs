@@ -60,8 +60,9 @@ impl fmt::Display for Object {
 pub(crate) enum ObjectContent {
     /// A heap allocated string
     String(Rc<str>),
+    /// A heap allocated value hoisted from the stack.
     Upvalue(RefCell<ObjUpvalue>),
-    // /// A closure that can captured surrounding variables
+    /// A closure that can captured surrounding variables
     Closure(RefCell<ObjClosure>),
     /// A function object
     Fun(RefCell<ObjFun>),
