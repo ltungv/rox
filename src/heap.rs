@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, ptr::NonNull, rc::Rc};
 
-use crate::object::{NativeFun, ObjClosure, ObjFun, Object, ObjectContent, ObjectRef};
+use crate::object::{NativeFun, ObjClosure, ObjFun, ObjUpvalue, Object, ObjectContent, ObjectRef};
 
 /// A managed heap that cleanups memory using a tracing garbage collector.
 #[derive(Debug, Default)]
@@ -15,6 +15,11 @@ impl Heap {
     pub(crate) fn alloc_string(&mut self, s: String) -> ObjectRef {
         let content = self.take_string(s);
         self.alloc(ObjectContent::String(content))
+    }
+
+    /// Allocates a new upvalue object using the content of the input string.
+    pub(crate) fn alloc_upvalue(&mut self, upvalue: ObjUpvalue) -> ObjectRef {
+        self.alloc(ObjectContent::Upvalue(RefCell::new(upvalue)))
     }
 
     /// Allocates a new closure object.

@@ -42,7 +42,7 @@ impl fmt::Display for ObjectRef {
 
 /// The structure of a heap-allocated object.
 #[derive(Debug)]
-pub struct Object {
+pub(crate) struct Object {
     /// A pointer to the next object in the linked list of allocated objects.
     pub(crate) next: Option<NonNull<Object>>,
     /// The object's data.
@@ -60,6 +60,7 @@ impl fmt::Display for Object {
 pub(crate) enum ObjectContent {
     /// A heap allocated string
     String(Rc<str>),
+    Upvalue(RefCell<ObjUpvalue>),
     // /// A closure that can captured surrounding variables
     Closure(RefCell<ObjClosure>),
     /// A function object
@@ -79,6 +80,14 @@ impl ObjectContent {
     pub(crate) fn as_string(&self) -> Result<Rc<str>, ObjectError> {
         match self {
             Self::String(s) => Ok(Rc::clone(s)),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
+
+    /// Cast the object to a upvalue reference.
+    pub(crate) fn as_upvalue(&self) -> Result<&RefCell<ObjUpvalue>, ObjectError> {
+        match self {
+            Self::Upvalue(u) => Ok(u),
             _ => Err(ObjectError::InvalidCast),
         }
     }
@@ -104,6 +113,7 @@ impl fmt::Display for ObjectContent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         match self {
             Self::String(s) => write!(f, "{s}"),
+            Self::Upvalue(u) => write!(f, "{}", u.borrow()),
             Self::Closure(c) => write!(f, "{}", c.borrow()),
             Self::Fun(fun) => write!(f, "{}", fun.borrow()),
             Self::NativeFun(fun) => write!(f, "{fun}"),
@@ -115,9 +125,10 @@ impl fmt::Display for ObjectContent {
 }
 
 #[derive(Debug)]
-pub struct ObjClosure {
+pub(crate) struct ObjClosure {
     /// The name of the function
     pub(crate) fun: ObjectRef,
+    pub(crate) upvalues: Vec<ObjectRef>,
 }
 
 impl fmt::Display for ObjClosure {
@@ -128,7 +139,19 @@ impl fmt::Display for ObjClosure {
 }
 
 #[derive(Debug)]
-pub struct ObjFun {
+pub(crate) enum ObjUpvalue {
+    Open(usize),
+    Closed(ObjectRef),
+}
+
+impl fmt::Display for ObjUpvalue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "upvalue")
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ObjFun {
     /// The name of the function
     pub(crate) name: Option<Rc<str>>,
     /// Number of parameters the function has

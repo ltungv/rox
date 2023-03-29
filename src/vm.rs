@@ -1,16 +1,17 @@
 //! Implementation of the bytecode virtual machine.
 
 use std::{
+    borrow::Borrow,
     cell::RefCell,
     collections::HashMap,
-    ops::{Add, Deref, Div, Mul, Neg, Not, Sub},
+    ops::{Add, Deref, DerefMut, Div, Mul, Neg, Not, Sub},
     rc::Rc,
 };
 
 use crate::{
     compile::Parser,
     heap::Heap,
-    object::{NativeFun, ObjClosure, ObjectContent, ObjectError, ObjectRef},
+    object::{NativeFun, ObjClosure, ObjUpvalue, ObjectContent, ObjectError, ObjectRef},
     opcode::Opcode,
     value::{Value, ValueError},
     InterpretError,
@@ -110,7 +111,11 @@ impl VirtualMachine {
         // Push the fun object onto the stack so GC won't remove it while we
         // allocating the closure.
         self.stack_push(Value::Object(fun_object))?;
-        let closure_object = self.heap.alloc_closure(ObjClosure { fun: fun_object });
+        // Create a closure for the script function. Note that script can't have upvalues.
+        let closure_object = self.heap.alloc_closure(ObjClosure {
+            fun: fun_object,
+            upvalues: Vec::new(),
+        });
         // Pop the fun object as we no longer need it.
         self.stack_pop()?;
         // Push the closure onto the stack so GC won't remove for the entire runtime.
@@ -289,7 +294,8 @@ impl<'vm> Task<'vm> {
                 Opcode::GetGlobal => self.get_global()?,
                 Opcode::SetGlobal => self.set_global()?,
                 Opcode::DefineGlobal => self.defined_global()?,
-                Opcode::Print => self.print()?,
+                Opcode::GetUpvalue => self.get_upvalue()?,
+                Opcode::SetUpvalue => self.set_upvalue()?,
                 Opcode::NE => self.ne()?,
                 Opcode::EQ => self.eq()?,
                 Opcode::GT => self.gt()?,
@@ -302,6 +308,7 @@ impl<'vm> Task<'vm> {
                 Opcode::Div => self.div()?,
                 Opcode::Not => self.not()?,
                 Opcode::Neg => self.neg()?,
+                Opcode::Print => self.print()?,
                 Opcode::Jump => self.jump(JumpDirection::Forward)?,
                 Opcode::JumpIfTrue => self.jump_if_true()?,
                 Opcode::JumpIfFalse => self.jump_if_false()?,
@@ -319,12 +326,64 @@ impl<'vm> Task<'vm> {
         Ok(())
     }
 
+    fn get_upvalue(&mut self) -> Result<(), RuntimeError> {
+        let upvalue_slot = self.read_byte()? as usize;
+        let frame = self.vm.frame()?;
+        let closure = frame.borrow().closure();
+        let upvalue_object = closure.borrow().upvalues[upvalue_slot];
+        let upvalue = upvalue_object.borrow().content.as_upvalue()?;
+        match upvalue.borrow().deref() {
+            ObjUpvalue::Open(stack_slot) => {
+                let value = self.vm.stack[*stack_slot];
+                self.vm.stack_push(value)?;
+            }
+            ObjUpvalue::Closed(_) => todo!(),
+        }
+        Ok(())
+    }
+
+    fn set_upvalue(&mut self) -> Result<(), RuntimeError> {
+        let upvalue_slot = self.read_byte()? as usize;
+        let frame = self.vm.frame()?;
+        let closure = frame.borrow().closure();
+        let upvalue_object = closure.borrow().upvalues[upvalue_slot];
+        let upvalue = upvalue_object.borrow().content.as_upvalue()?;
+        match upvalue.borrow_mut().deref_mut() {
+            ObjUpvalue::Open(stack_slot) => self.vm.stack[*stack_slot] = *self.vm.stack_top(0)?,
+            ObjUpvalue::Closed(_) => todo!(),
+        }
+        Ok(())
+    }
+
     fn closure(&mut self) -> Result<(), RuntimeError> {
         let constant = self.read_constant()?;
-        let fun = constant.as_object()?;
-        let closure = self.vm.heap.alloc_closure(ObjClosure { fun });
+        let fun_object = constant.as_object()?;
+        let fun = fun_object.content.as_fun()?;
+
+        let upvalue_count = fun.borrow().upvalue_count as usize;
+        let mut upvalues = Vec::with_capacity(upvalue_count);
+        for _ in 0..upvalue_count {
+            let is_local = self.read_byte()? == 1;
+            let index = self.read_byte()? as usize;
+            if is_local {
+                upvalues.push(self.capture_upvalue(self.vm.frame()?.slot + index));
+            } else {
+                let closure = self.vm.frame()?.closure();
+                upvalues.push(closure.borrow().upvalues[index]);
+            }
+        }
+
+        let closure = self.vm.heap.alloc_closure(ObjClosure {
+            fun: fun_object,
+            upvalues,
+        });
         self.vm.stack_push(Value::Object(closure))?;
+
         Ok(())
+    }
+
+    fn capture_upvalue(&mut self, location: usize) -> ObjectRef {
+        self.vm.heap.alloc_upvalue(ObjUpvalue::Open(location))
     }
 
     fn ret(&mut self) -> Result<bool, RuntimeError> {
