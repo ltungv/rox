@@ -45,10 +45,6 @@ pub enum RuntimeError {
     #[error("Stack overflow.")]
     StackOverflow,
 
-    /// Exhausted the virtual machine's stack.
-    #[error("Stack exhausted.")]
-    StackExhausted,
-
     /// Can't find a variable in scope.
     #[error("Undefined variable '{0}'.")]
     UndefinedVariable(String),
@@ -119,7 +115,7 @@ impl VirtualMachine {
             .heap
             .alloc_closure(ObjClosure::new(fun_object, Vec::new()));
         // Pop the fun object as we no longer need it.
-        self.stack_pop()?;
+        self.stack_pop();
         // Push the closure onto the stack so GC won't remove for the entire runtime.
         self.stack_push(Value::Object(closure_object))?;
         // Start running the closure.
@@ -128,12 +124,14 @@ impl VirtualMachine {
             .and_then(|_| task.run())
     }
 
-    fn frame(&self) -> Result<&CallFrame, RuntimeError> {
-        self.frames.last().ok_or(RuntimeError::StackExhausted)
+    fn frame(&self) -> &CallFrame {
+        let index = self.frames.len() - 1;
+        &self.frames[index]
     }
 
-    fn frame_mut(&mut self) -> Result<&mut CallFrame, RuntimeError> {
-        self.frames.last_mut().ok_or(RuntimeError::StackExhausted)
+    fn frame_mut(&mut self) -> &mut CallFrame {
+        let index = self.frames.len() - 1;
+        &mut self.frames[index]
     }
 
     fn frames_push(&mut self, frame: CallFrame) -> Result<usize, RuntimeError> {
@@ -145,8 +143,8 @@ impl VirtualMachine {
         Ok(frame_count)
     }
 
-    fn frames_pop(&mut self) -> Result<CallFrame, RuntimeError> {
-        self.frames.pop().ok_or(RuntimeError::StackExhausted)
+    fn frames_pop(&mut self) -> CallFrame {
+        self.frames.pop().expect("Stack empty.")
     }
 
     fn stack_push(&mut self, value: Value) -> Result<usize, RuntimeError> {
@@ -158,24 +156,18 @@ impl VirtualMachine {
         Ok(stack_size)
     }
 
-    fn stack_pop(&mut self) -> Result<Value, RuntimeError> {
-        self.stack.pop().ok_or(RuntimeError::StackExhausted)
+    fn stack_pop(&mut self) -> Value {
+        self.stack.pop().expect("Stack empty.")
     }
 
-    fn stack_top(&self, n: usize) -> Result<&Value, RuntimeError> {
-        if self.stack.is_empty() {
-            return Err(RuntimeError::StackExhausted);
-        }
+    fn stack_top(&self, n: usize) -> &Value {
         let index = self.stack.len() - n - 1;
-        Ok(&self.stack[index])
+        &self.stack[index]
     }
 
-    fn stack_top_mut(&mut self, n: usize) -> Result<&mut Value, RuntimeError> {
-        if self.stack.is_empty() {
-            return Err(RuntimeError::StackExhausted);
-        }
+    fn stack_top_mut(&mut self, n: usize) -> &mut Value {
         let index = self.stack.len() - n - 1;
-        Ok(&mut self.stack[index])
+        &mut self.stack[index]
     }
 
     fn stack_remove_top(&mut self, n: usize) {
@@ -205,8 +197,8 @@ impl VirtualMachine {
         let fun = NativeFun { arity, call };
         let fun_object = self.heap.alloc_native_fun(fun);
         self.stack_push(Value::Object(fun_object))?;
-        self.globals.insert(fun_name, *self.stack_top(0)?);
-        self.stack_pop()?;
+        self.globals.insert(fun_name, *self.stack_top(0));
+        self.stack_pop();
         Ok(())
     }
 
@@ -250,18 +242,18 @@ impl<'vm> Task<'vm> {
 
     /// Read the next byte in the stream of bytecode instructions.
     fn read_byte(&mut self) -> Result<u8, RuntimeError> {
-        self.vm.frame_mut().and_then(|f| f.read_byte())
+        self.vm.frame_mut().read_byte()
     }
 
     /// Read the next 2 bytes in the stream of bytecode instructions.
     fn read_short(&mut self) -> Result<u16, RuntimeError> {
-        self.vm.frame_mut().and_then(|f| f.read_short())
+        self.vm.frame_mut().read_short()
     }
 
     /// Read the next byte in the stream of bytecode instructions and return the constant at the
     /// index given by the byte.
     fn read_constant(&mut self) -> Result<Value, RuntimeError> {
-        self.vm.frame_mut().and_then(|f| f.read_constant())
+        self.vm.frame_mut().read_constant()
     }
 }
 
@@ -272,7 +264,7 @@ impl<'vm> Task<'vm> {
             {
                 self.vm.heap_trace();
                 self.vm.stack_trace();
-                let frame = self.vm.frame()?;
+                let frame = self.vm.frame();
                 let closure_ref = frame.closure().borrow();
                 let fun_ref = closure_ref.fun().borrow();
                 disassemble_instruction(&fun_ref.chunk, frame.ip);
@@ -289,7 +281,7 @@ impl<'vm> Task<'vm> {
                     self.vm.stack_push(Value::Bool(false))?;
                 }
                 Opcode::Pop => {
-                    self.vm.stack_pop()?;
+                    self.vm.stack_pop();
                 }
                 Opcode::GetLocal => self.get_local()?,
                 Opcode::SetLocal => self.set_local()?,
@@ -319,7 +311,7 @@ impl<'vm> Task<'vm> {
                 Opcode::Closure => self.closure()?,
                 Opcode::CloseUpvalue => {
                     self.close_upvalues(self.vm.stack.len() - 1)?;
-                    self.vm.stack_pop()?;
+                    self.vm.stack_pop();
                 }
                 Opcode::Ret => {
                     if self.ret()? {
@@ -335,7 +327,7 @@ impl<'vm> Task<'vm> {
     /// Get the value of the variable capture by an upvalue.
     fn get_upvalue(&mut self) -> Result<(), RuntimeError> {
         let upvalue_slot = self.read_byte()?;
-        let frame = self.vm.frame()?;
+        let frame = self.vm.frame();
         let closure = frame.borrow().closure();
         let upvalue_object = closure.borrow().upvalues[upvalue_slot as usize];
         let upvalue = upvalue_object.borrow().as_upvalue()?;
@@ -356,15 +348,15 @@ impl<'vm> Task<'vm> {
     /// Set the value of the variable capture by an upvalue.
     fn set_upvalue(&mut self) -> Result<(), RuntimeError> {
         let upvalue_slot = self.read_byte()?;
-        let frame = self.vm.frame()?;
+        let frame = self.vm.frame();
         let closure = frame.borrow().closure();
         let upvalue_object = closure.borrow().upvalues[upvalue_slot as usize];
         let upvalue = upvalue_object.borrow().as_upvalue()?;
         match upvalue.borrow_mut().deref_mut() {
             // Value is on the stack.
-            ObjUpvalue::Open(stack_slot) => self.vm.stack[*stack_slot] = *self.vm.stack_top(0)?,
+            ObjUpvalue::Open(stack_slot) => self.vm.stack[*stack_slot] = *self.vm.stack_top(0),
             // Value is on the heap.
-            ObjUpvalue::Closed(value) => *value = *self.vm.stack_top(0)?,
+            ObjUpvalue::Closed(value) => *value = *self.vm.stack_top(0),
         }
         Ok(())
     }
@@ -380,9 +372,9 @@ impl<'vm> Task<'vm> {
             let is_local = self.read_byte()? == 1;
             let index = self.read_byte()? as usize;
             if is_local {
-                upvalues.push(self.capture_upvalue(self.vm.frame()?.slot + index)?);
+                upvalues.push(self.capture_upvalue(self.vm.frame().slot + index)?);
             } else {
-                let closure = self.vm.frame()?.closure();
+                let closure = self.vm.frame().closure();
                 upvalues.push(closure.borrow().upvalues[index]);
             }
         }
@@ -441,15 +433,15 @@ impl<'vm> Task<'vm> {
     /// Return from a function call
     fn ret(&mut self) -> Result<bool, RuntimeError> {
         // Get the result of the function.
-        let result = self.vm.stack_pop()?;
+        let result = self.vm.stack_pop();
         // The compiler didn't emit Opcode::CloseUpvalue at the end of each of the outer most scope
         // that defines the body. That scope contains function parameters and also local variables
         // that need to be closed over.
-        self.close_upvalues(self.vm.frame()?.slot)?;
-        let frame = self.vm.frames_pop()?;
+        self.close_upvalues(self.vm.frame().slot)?;
+        let frame = self.vm.frames_pop();
         if self.vm.frames.is_empty() {
             // Have reach the end of the script if there's no stack frame left.
-            self.vm.stack_pop()?;
+            self.vm.stack_pop();
             return Ok(true);
         }
         // Pop all data related to the stack frame.
@@ -461,7 +453,7 @@ impl<'vm> Task<'vm> {
 
     fn call(&mut self) -> Result<(), RuntimeError> {
         let argc = self.read_byte()?;
-        let v = self.vm.stack_top(argc as usize)?;
+        let v = self.vm.stack_top(argc as usize);
         self.call_value(*v, argc)?;
         Ok(())
     }
@@ -520,7 +512,7 @@ impl<'vm> Task<'vm> {
 
     fn jump(&mut self, direction: JumpDirection) -> Result<(), RuntimeError> {
         let offset = self.read_short()?;
-        let frame = self.vm.frame_mut()?;
+        let frame = self.vm.frame_mut();
         match direction {
             JumpDirection::Forward => frame.ip += offset as usize,
             JumpDirection::Backward => frame.ip -= offset as usize,
@@ -530,9 +522,9 @@ impl<'vm> Task<'vm> {
 
     fn jump_if_true(&mut self) -> Result<(), RuntimeError> {
         let offset = self.read_short()?;
-        let val = self.vm.stack_top(0)?;
+        let val = self.vm.stack_top(0);
         if val.is_truthy() {
-            let frame = self.vm.frame_mut()?;
+            let frame = self.vm.frame_mut();
             frame.ip += offset as usize;
         }
         Ok(())
@@ -540,9 +532,9 @@ impl<'vm> Task<'vm> {
 
     fn jump_if_false(&mut self) -> Result<(), RuntimeError> {
         let offset = self.read_short()?;
-        let val = self.vm.stack_top(0)?;
+        let val = self.vm.stack_top(0);
         if val.is_falsey() {
-            let frame = self.vm.frame_mut()?;
+            let frame = self.vm.frame_mut();
             frame.ip += offset as usize;
         }
         Ok(())
@@ -552,7 +544,7 @@ impl<'vm> Task<'vm> {
     fn get_local(&mut self) -> Result<(), RuntimeError> {
         let slot = self.read_byte()? as usize;
         let frame_slot = {
-            let frame = self.vm.frame()?;
+            let frame = self.vm.frame();
             frame.slot
         };
         self.vm.stack_push(self.vm.stack[frame_slot + slot])?;
@@ -563,10 +555,10 @@ impl<'vm> Task<'vm> {
     fn set_local(&mut self) -> Result<(), RuntimeError> {
         let slot = self.read_byte()? as usize;
         let frame_slot = {
-            let frame = self.vm.frame()?;
+            let frame = self.vm.frame();
             frame.slot
         };
-        self.vm.stack[frame_slot + slot] = *self.vm.stack_top(0)?;
+        self.vm.stack[frame_slot + slot] = *self.vm.stack_top(0);
         Ok(())
     }
 
@@ -589,7 +581,7 @@ impl<'vm> Task<'vm> {
         let constant = self.read_constant()?;
         let object = constant.as_object()?;
         let name = object.as_string()?;
-        let value = self.vm.stack_top(0)?;
+        let value = self.vm.stack_top(0);
         if !self.vm.globals.contains_key(&name) {
             return Err(RuntimeError::UndefinedVariable(name.to_string()));
         }
@@ -601,7 +593,7 @@ impl<'vm> Task<'vm> {
     fn defined_global(&mut self) -> Result<(), RuntimeError> {
         let constant = self.read_constant()?;
         let global_name = constant.as_object()?.as_string()?;
-        let global_value = self.vm.stack_pop()?;
+        let global_value = self.vm.stack_pop();
         self.vm.globals.insert(global_name, global_value);
         Ok(())
     }
@@ -614,43 +606,43 @@ impl<'vm> Task<'vm> {
     }
 
     fn ne(&mut self) -> Result<(), RuntimeError> {
-        let rhs = self.vm.stack_pop()?;
-        let lhs = self.vm.stack_top_mut(0)?;
+        let rhs = self.vm.stack_pop();
+        let lhs = self.vm.stack_top_mut(0);
         *lhs = Value::Bool((*lhs).ne(&rhs));
         Ok(())
     }
 
     fn eq(&mut self) -> Result<(), RuntimeError> {
-        let rhs = self.vm.stack_pop()?;
-        let lhs = self.vm.stack_top_mut(0)?;
+        let rhs = self.vm.stack_pop();
+        let lhs = self.vm.stack_top_mut(0);
         *lhs = Value::Bool((*lhs).eq(&rhs));
         Ok(())
     }
 
     fn gt(&mut self) -> Result<(), RuntimeError> {
-        let rhs = self.vm.stack_pop()?;
-        let lhs = self.vm.stack_top_mut(0)?;
+        let rhs = self.vm.stack_pop();
+        let lhs = self.vm.stack_top_mut(0);
         *lhs = Value::Bool((*lhs).gt(&rhs)?);
         Ok(())
     }
 
     fn ge(&mut self) -> Result<(), RuntimeError> {
-        let rhs = self.vm.stack_pop()?;
-        let lhs = self.vm.stack_top_mut(0)?;
+        let rhs = self.vm.stack_pop();
+        let lhs = self.vm.stack_top_mut(0);
         *lhs = Value::Bool((*lhs).ge(&rhs)?);
         Ok(())
     }
 
     fn lt(&mut self) -> Result<(), RuntimeError> {
-        let rhs = self.vm.stack_pop()?;
-        let lhs = self.vm.stack_top_mut(0)?;
+        let rhs = self.vm.stack_pop();
+        let lhs = self.vm.stack_top_mut(0);
         *lhs = Value::Bool((*lhs).lt(&rhs)?);
         Ok(())
     }
 
     fn le(&mut self) -> Result<(), RuntimeError> {
-        let rhs = self.vm.stack_pop()?;
-        let lhs = self.vm.stack_top_mut(0)?;
+        let rhs = self.vm.stack_pop();
+        let lhs = self.vm.stack_top_mut(0);
         *lhs = Value::Bool((*lhs).le(&rhs)?);
         Ok(())
     }
@@ -658,8 +650,8 @@ impl<'vm> Task<'vm> {
     fn add(&mut self) -> Result<(), RuntimeError> {
         // The peek the first 2 items on the stack instead of pop so the GC can see them and won't
         // deaalocate the objects when we allocate a new object for the result.
-        let rhs = self.vm.stack_top(0)?;
-        let lhs = self.vm.stack_top(1)?;
+        let rhs = self.vm.stack_top(0);
+        let lhs = self.vm.stack_top(1);
         let res = match (*lhs, rhs) {
             // Operations on objects might allocate a new one.
             (Value::Object(o1), Value::Object(o2)) => match (&o1.content, &o2.content) {
@@ -679,47 +671,47 @@ impl<'vm> Task<'vm> {
             _ => lhs.add(rhs)?,
         };
         // Remove the RHS.
-        self.vm.stack_pop()?;
+        self.vm.stack_pop();
         // Update the LHS.
-        *self.vm.stack_top_mut(0)? = res;
+        *self.vm.stack_top_mut(0) = res;
         Ok(())
     }
 
     fn sub(&mut self) -> Result<(), RuntimeError> {
-        let rhs = self.vm.stack_pop()?;
-        let lhs = self.vm.stack_top_mut(0)?;
+        let rhs = self.vm.stack_pop();
+        let lhs = self.vm.stack_top_mut(0);
         *lhs = lhs.sub(&rhs)?;
         Ok(())
     }
 
     fn mul(&mut self) -> Result<(), RuntimeError> {
-        let rhs = self.vm.stack_pop()?;
-        let lhs = self.vm.stack_top_mut(0)?;
+        let rhs = self.vm.stack_pop();
+        let lhs = self.vm.stack_top_mut(0);
         *lhs = lhs.mul(&rhs)?;
         Ok(())
     }
 
     fn div(&mut self) -> Result<(), RuntimeError> {
-        let rhs = self.vm.stack_pop()?;
-        let lhs = self.vm.stack_top_mut(0)?;
+        let rhs = self.vm.stack_pop();
+        let lhs = self.vm.stack_top_mut(0);
         *lhs = lhs.div(&rhs)?;
         Ok(())
     }
 
     fn not(&mut self) -> Result<(), RuntimeError> {
-        let v = self.vm.stack_top_mut(0)?;
+        let v = self.vm.stack_top_mut(0);
         *v = v.not();
         Ok(())
     }
 
     fn neg(&mut self) -> Result<(), RuntimeError> {
-        let v = self.vm.stack_top_mut(0)?;
+        let v = self.vm.stack_top_mut(0);
         *v = v.neg()?;
         Ok(())
     }
 
     fn print(&mut self) -> Result<(), RuntimeError> {
-        let val = self.vm.stack_pop()?;
+        let val = self.vm.stack_pop();
         println!("{val}");
         Ok(())
     }

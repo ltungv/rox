@@ -243,14 +243,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.consume(Kind::LParen, "Expect '(' after function name.");
         if !self.check_curr(Kind::RParen) {
             loop {
-                let fun = &mut self.compiler_mut(0).fun;
-                if fun.arity as usize == MAX_PARAMS {
+                let compiler = self.compiler_mut(0);
+                if compiler.fun.arity as usize == MAX_PARAMS {
                     self.error_curr("Can't have more than 255 parameters.");
                     return;
                 }
 
                 // Treat params like variables.
-                fun.arity += 1;
+                compiler.fun.arity += 1;
                 let ident_id = self.parse_variable("Expect parameter name.");
                 self.define_variable(ident_id);
 
@@ -1096,13 +1096,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn compiler(&self, height: usize) -> &Compiler<'src> {
-        let total = self.compilers.len();
-        &self.compilers[total - height - 1]
+        let index = self.compilers.len() - height - 1;
+        &self.compilers[index]
     }
 
     fn compiler_mut(&mut self, height: usize) -> &mut Compiler<'src> {
-        let total = self.compilers.len();
-        &mut self.compilers[total - height - 1]
+        let index = self.compilers.len() - height - 1;
+        &mut self.compilers[index]
     }
 
     /// Synchronize the parser to a normal state where we can continue parsing
