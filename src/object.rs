@@ -10,7 +10,7 @@ pub enum ObjectError {
 
 /// A reference to the heap-allocated object.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ObjectRef(NonNull<Object>);
+pub(crate) struct ObjectRef(pub(crate) NonNull<Object>);
 
 impl ObjectRef {
     /// Cast the object to a string reference.
@@ -56,15 +56,6 @@ impl From<Box<Object>> for ObjectRef {
     fn from(value: Box<Object>) -> Self {
         let object_ptr = NonNull::from(Box::leak(value));
         Self::from(object_ptr)
-    }
-}
-
-impl From<ObjectRef> for Box<Object> {
-    #[allow(unsafe_code)]
-    fn from(value: ObjectRef) -> Box<Object> {
-        // SAFETY: If we still own a handle then the underlying must not be deallocated. Thus, it's
-        // consume and box it.
-        unsafe { Box::from_raw(value.0.as_ptr()) }
     }
 }
 

@@ -67,11 +67,10 @@ impl Heap {
     /// Remove the object at the head of the linked list.
     #[allow(unsafe_code)]
     fn pop(&mut self) -> Option<ObjectContent> {
-        // SAFETY: If the object was deallocated, it must be removed from the linked list. If
-        // we still can access the object from the linked list then it must have not been
-        // deallocated.
         self.head.map(|head| {
-            let object: Box<Object> = head.into();
+            // SAFETY: If we still own a handle then the underlying data must not be deallocated.
+            // Thus, it's consume and box it.
+            let object = unsafe { Box::from_raw(head.0.as_ptr()) };
             self.head = object.next;
             object.content
         })
@@ -116,12 +115,8 @@ pub(crate) struct HeapIter {
 impl Iterator for HeapIter {
     type Item = ObjectRef;
 
-    #[allow(unsafe_code)]
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(node) = self.next {
-            // SAFETY: If the object was deallocated, it must be removed from the linked list. If
-            // we still can access the object from the linked list then it must have not been
-            // deallocated.
             self.next = node.next;
             return Some(node);
         }
