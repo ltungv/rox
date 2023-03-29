@@ -5,7 +5,6 @@ use crate::{
     object::{ObjFun, ObjectRef},
     opcode::Opcode,
     scan::{Kind, Line, Scanner, Token},
-    stack::Stack,
     value::Value,
 };
 use std::cell::RefCell;
@@ -13,7 +12,17 @@ use std::cell::RefCell;
 #[cfg(debug_assertions)]
 use crate::chunk::disassemble_chunk;
 
-const MAX_PARAMS: usize = 255;
+/// Max number of constants a chunk can contain.
+const MAX_CONSTANTS: usize = u8::MAX as usize + 1;
+
+/// Max number of parameters a function can accept.
+const MAX_PARAMS: usize = u8::MAX as usize;
+
+/// Max number of local variables a function can contain.
+const MAX_LOCALS: usize = u8::MAX as usize + 1;
+
+/// Max number of upvalues a function can contain.
+const MAX_UPVALUES: usize = u8::MAX as usize + 1;
 
 /// Scan for tokens and emit corresponding bytecodes.
 ///
@@ -292,7 +301,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let compiler = self.compiler_mut(0);
         // Skip this step for global scope.
         if compiler.scope_depth > 0 {
-            for local in compiler.locals.into_iter().rev() {
+            for local in compiler.locals.iter().rev() {
                 if local.depth != -1 && local.depth < compiler.scope_depth {
                     // Stop if we've gone through all initialized variable in the current scope.
                     break;
@@ -309,6 +318,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn add_local(&mut self, name: Token<'src>) {
         let compiler = self.compiler_mut(0);
+        let local_count = compiler.locals.len();
+        if local_count == MAX_LOCALS {
+            self.error_prev("Too many local variables in function.");
+            return;
+        }
         // When a local variable is first declared, it is marked as "uninitialized" by setting
         // depth=-1. Once we finish parsing the variable initializer, we set depth back to its
         // correct scope depth.
@@ -316,9 +330,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             name: name.lexeme,
             depth: -1,
         };
-        if compiler.locals.push(local).is_none() {
-            self.error_prev("Too many local variables in function.");
-        }
+        compiler.locals.push(local);
     }
 
     /// Put an identifier as a string object in the list of constant.
@@ -373,7 +385,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if compiler.scope_depth > 0 {
             let local = compiler
                 .locals
-                .top_mut(0)
+                .last_mut()
                 .expect("A local varialbe should have been declared.");
             local.depth = compiler.scope_depth;
         }
@@ -870,19 +882,17 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Find the stack index the hold the local variable with the given name.
     fn resolve_local(&mut self, name: Token<'_>, height: usize) -> Option<u8> {
-        println!("resolve local ({height}) '{name:?}'");
         if height >= self.compilers.len() {
             // There's no compiler at this height.
             return None;
         }
         // Walk up from low scope to high scope to find a local with the given name.
         let compiler = self.compiler(height);
-        for (id, local) in compiler.locals.into_iter().enumerate().rev() {
+        for (id, local) in compiler.locals.iter().enumerate().rev() {
             if local.name == name.lexeme {
                 if local.depth == -1 {
                     self.error_prev("Can't read local variable in its own initializer.");
                 }
-                println!("found local ({height}) '{name:?}'");
                 // Found a valid value for the variable.
                 return Some(id as u8);
             }
@@ -895,7 +905,6 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// An upvalue refers to a local variable in an enclosing function. Every closure maintains
     /// an array of upvalues, one for each surrounding local variable that the closure uses.
     fn resolve_upvalue(&mut self, name: Token<'_>, height: usize) -> Option<u8> {
-        println!("resolve upval ({height}) '{name:?}'");
         if height >= self.compilers.len() {
             // There's no compiler at this height
             return None;
@@ -906,7 +915,6 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
         // Find a matching upvalue in the enclosing
         if let Some(upvalue) = self.resolve_upvalue(name, height + 1) {
-            println!("found upval ({height}) '{name:?}'");
             return Some(self.add_upvalue(height, upvalue, false));
         }
         None
@@ -916,19 +924,21 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// corresponding upvalue is returned instead of adding a new upvalue.
     fn add_upvalue(&mut self, height: usize, index: u8, is_local: bool) -> u8 {
         // Find an upvalue that references the same index.
-        for (upval_index, upval) in self.compiler(height).upvalues.into_iter().enumerate() {
+        for (upval_index, upval) in self.compiler(height).upvalues.iter().enumerate() {
             if upval.index == index && upval.is_local == is_local {
                 return upval_index as u8;
             }
         }
-        // Add the upvalue.
-        let upval = Upvalue { is_local, index };
-        if let Some(upval_index) = self.compiler_mut(height).upvalues.push(upval) {
-            upval_index as u8
-        } else {
+        let compiler = self.compiler_mut(height);
+        let upvalue_count = compiler.upvalues.len();
+        if upvalue_count == MAX_UPVALUES {
             self.error_prev("Too many closure variables in function.");
-            0
+            return 0;
         }
+        // Add the upvalue.
+        let upvalue = Upvalue { is_local, index };
+        compiler.upvalues.push(upvalue);
+        upvalue_count as u8
     }
 
     /// Create a string literal and emit bytecodes to load it value.
@@ -1046,13 +1056,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Write a constant to the currently compiling chunk.
     fn make_constant(&mut self, value: Value) -> u8 {
         let constant_id = self.fun(0).borrow_mut().chunk.write_constant(value);
-        match constant_id {
-            None => {
-                self.error_prev("Too many constants in one chunk.");
-                0
-            }
-            Some(id) => id as u8,
+        if constant_id >= MAX_CONSTANTS {
+            self.error_prev("Too many constants in one chunk.");
+            return 0;
         }
+        constant_id as u8
     }
 
     /// Start a new scope.
@@ -1065,7 +1073,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn end_scope(&mut self) {
         // Update the current scope.
         self.compiler_mut(0).scope_depth -= 1;
-        while let Some(local) = self.compiler(0).locals.top(0) {
+        while let Some(local) = self.compiler(0).locals.last() {
             // End once we reach the current scope.
             if local.depth <= self.compiler(0).scope_depth {
                 break;
@@ -1195,21 +1203,19 @@ struct Compiler<'src> {
     /// The number of "blocks" surrounding the current piece of code that we're compiling.
     scope_depth: isize,
     /// A stack of local variables sorted by the order in which they are declared.
-    locals: Stack<Local<'src>, { u8::MAX as usize + 1 }>,
+    locals: Vec<Local<'src>>,
     /// A stack of local variables sorted by the order in which they are declared.
-    upvalues: Stack<Upvalue, { u8::MAX as usize + 1 }>,
+    upvalues: Vec<Upvalue>,
 }
 
 impl<'src> Compiler<'src> {
     fn new(fun: ObjectRef, fun_type: FunctionType) -> Self {
-        let mut locals = Stack::default();
-        locals.push(Local { name: "", depth: 0 });
         Self {
             fun,
             fun_type,
             scope_depth: 0,
-            locals,
-            upvalues: Stack::default(),
+            locals: vec![Local { name: "", depth: 0 }],
+            upvalues: vec![],
         }
     }
 

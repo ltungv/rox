@@ -12,7 +12,6 @@ use crate::{
     heap::Heap,
     object::{NativeFun, ObjClosure, ObjectContent, ObjectError, ObjectRef},
     opcode::Opcode,
-    stack::Stack,
     value::{Value, ValueError},
     InterpretError,
 };
@@ -64,20 +63,25 @@ pub enum RuntimeError {
 }
 
 /// A bytecode virtual machine for the Lox programming language.
-#[derive(Default)]
 pub struct VirtualMachine {
-    stack: Stack<Value, VM_STACK_SIZE>,
-    frames: Stack<CallFrame, VM_FRAMES_MAX>,
+    stack: Vec<Value>,
+    frames: Vec<CallFrame>,
     globals: HashMap<Rc<str>, Value>,
     heap: Heap,
+}
+
+impl Default for VirtualMachine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VirtualMachine {
     /// Create a new virtual machine that prints to the given output.
     pub fn new() -> Self {
         let mut vm = Self {
-            stack: Stack::default(),
-            frames: Stack::default(),
+            stack: Vec::default(),
+            frames: Vec::default(),
             globals: HashMap::default(),
             heap: Heap::default(),
         };
@@ -97,7 +101,7 @@ impl VirtualMachine {
             if let Err(err) = self.frames_trace() {
                 eprintln!("{err}");
             };
-            self.stack.reset();
+            self.stack.clear();
             InterpretError::Runtime
         })
     }
@@ -118,15 +122,20 @@ impl VirtualMachine {
     }
 
     fn frame(&self) -> Result<&CallFrame, RuntimeError> {
-        self.frames.top(0).ok_or(RuntimeError::StackExhausted)
+        self.frames.last().ok_or(RuntimeError::StackExhausted)
     }
 
     fn frame_mut(&mut self) -> Result<&mut CallFrame, RuntimeError> {
-        self.frames.top_mut(0).ok_or(RuntimeError::StackExhausted)
+        self.frames.last_mut().ok_or(RuntimeError::StackExhausted)
     }
 
     fn frames_push(&mut self, frame: CallFrame) -> Result<usize, RuntimeError> {
-        self.frames.push(frame).ok_or(RuntimeError::StackOverflow)
+        let frame_count = self.frames.len();
+        if frame_count == VM_FRAMES_MAX {
+            return Err(RuntimeError::StackOverflow);
+        }
+        self.frames.push(frame);
+        Ok(frame_count)
     }
 
     fn frames_pop(&mut self) -> Result<CallFrame, RuntimeError> {
@@ -134,7 +143,16 @@ impl VirtualMachine {
     }
 
     fn stack_push(&mut self, value: Value) -> Result<usize, RuntimeError> {
-        self.stack.push(value).ok_or(RuntimeError::StackOverflow)
+        let stack_size = self.stack.len();
+        if stack_size == VM_STACK_SIZE {
+            return Err(RuntimeError::StackOverflow);
+        }
+        self.stack.push(value);
+        Ok(stack_size)
+    }
+
+    fn stack_remove_top(&mut self, n: usize) {
+        self.stack.drain(self.stack.len() - n..);
     }
 
     fn stack_pop(&mut self) -> Result<Value, RuntimeError> {
@@ -142,15 +160,23 @@ impl VirtualMachine {
     }
 
     fn stack_top(&self, n: usize) -> Result<&Value, RuntimeError> {
-        self.stack.top(n).ok_or(RuntimeError::StackExhausted)
+        if self.stack.is_empty() {
+            return Err(RuntimeError::StackExhausted);
+        }
+        let index = self.stack.len() - n - 1;
+        Ok(&self.stack[index])
     }
 
     fn stack_top_mut(&mut self, n: usize) -> Result<&mut Value, RuntimeError> {
-        self.stack.top_mut(n).ok_or(RuntimeError::StackExhausted)
+        if self.stack.is_empty() {
+            return Err(RuntimeError::StackExhausted);
+        }
+        let index = self.stack.len() - n - 1;
+        Ok(&mut self.stack[index])
     }
 
     fn frames_trace(&self) -> Result<(), RuntimeError> {
-        for frame in self.frames.into_iter().rev() {
+        for frame in self.frames.iter().rev() {
             let closure_ref = frame.closure.content.as_closure()?.borrow();
             let fun_ref = closure_ref.fun.content.as_fun()?.borrow();
             let line = fun_ref.chunk.get_line(frame.ip - 1);
@@ -180,7 +206,7 @@ impl VirtualMachine {
     #[cfg(debug_assertions)]
     fn stack_trace(&self) {
         print!("          ");
-        for value in self.stack.into_iter() {
+        for value in self.stack.iter() {
             print!("[ {value} ]");
         }
         println!();
@@ -304,11 +330,11 @@ impl<'vm> Task<'vm> {
     fn ret(&mut self) -> Result<bool, RuntimeError> {
         let result = self.vm.stack_pop()?;
         let frame = self.vm.frames_pop()?;
-        if self.vm.frames.len() == 0 {
+        if self.vm.frames.is_empty() {
             self.vm.stack_pop()?;
             return Ok(true);
         }
-        self.vm.stack.reset_to(frame.slot);
+        self.vm.stack_remove_top(self.vm.stack.len() - frame.slot);
         self.vm.stack_push(result)?;
         Ok(false)
     }
@@ -367,7 +393,7 @@ impl<'vm> Task<'vm> {
         let argc = argc as usize;
         let call = fun.call;
         let res = call(&self.vm.stack[sp - argc..]);
-        self.vm.stack.reset_to(sp - argc - 1);
+        self.vm.stack_remove_top(argc + 1);
         self.vm.stack_push(res)?;
         Ok(())
     }

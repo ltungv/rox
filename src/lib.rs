@@ -9,7 +9,6 @@ mod heap;
 mod object;
 mod opcode;
 mod scan;
-mod stack;
 mod value;
 mod vm;
 

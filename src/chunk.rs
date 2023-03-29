@@ -1,4 +1,4 @@
-use crate::{opcode::Opcode, scan::Line, stack::Stack, value::Value};
+use crate::{opcode::Opcode, scan::Line, value::Value};
 
 #[cfg(debug_assertions)]
 use crate::vm::JumpDirection;
@@ -6,7 +6,7 @@ use crate::vm::JumpDirection;
 /// A chunk holds a sequence of instructions to be executes and their data.
 #[derive(Debug, Default)]
 pub(crate) struct Chunk {
-    pub(crate) constants: Stack<Value, { u8::MAX as usize + 1 }>,
+    pub(crate) constants: Vec<Value>,
     pub(crate) instructions: Vec<u8>,
     pub(crate) lines: Vec<Line>,
     pub(crate) line_run_lengths: Vec<usize>,
@@ -35,8 +35,9 @@ impl Chunk {
     }
 
     /// Write a constant into the chunk.
-    pub(crate) fn write_constant(&mut self, value: Value) -> Option<usize> {
-        self.constants.push(value)
+    pub(crate) fn write_constant(&mut self, value: Value) -> usize {
+        self.constants.push(value);
+        self.constants.len() - 1
     }
 
     /// Get the line information of the bytecode at a specific offset.
