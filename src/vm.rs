@@ -193,7 +193,7 @@ impl VirtualMachine {
         arity: u8,
         call: fn(&[Value]) -> Value,
     ) -> Result<(), RuntimeError> {
-        let fun_name = self.heap.take_string(String::from(name));
+        let fun_name = self.heap.intern(String::from(name));
         let fun = NativeFun { arity, call };
         let fun_object = self.heap.alloc_native_fun(fun);
         self.stack_push(Value::Object(fun_object))?;

@@ -235,7 +235,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// ```
     fn function(&mut self, fun_type: FunctionType) {
         // Interned the function name and allocate a new function.
-        let fun_name = self.heap.take_string(String::from(self.token_prev.lexeme));
+        let fun_name = self.heap.intern(String::from(self.token_prev.lexeme));
         self.compilers
             .push(Compiler::new(ObjFun::new(Some(fun_name)), fun_type));
 
@@ -1111,7 +1111,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.panicking = false;
         while !self.check_curr(Kind::Eof) {
             // Skip tokens until we reach a statement boundary. Once we found something that look like
-            // a state, we can be confident that compilation can go back to normal.
+            // a statement, we can be confident that compilation can go back to normal.
             if self.check_prev(Kind::Semicolon)
                 || self.check_curr(Kind::Class)
                 || self.check_curr(Kind::Fun)

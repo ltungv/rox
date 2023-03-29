@@ -13,7 +13,7 @@ pub(crate) struct Heap {
 impl Heap {
     /// Allocates a new string object using the content of the input string.
     pub(crate) fn alloc_string(&mut self, s: String) -> ObjectRef {
-        let content = self.take_string(s);
+        let content = self.intern(s);
         self.alloc(ObjectContent::String(content))
     }
 
@@ -38,7 +38,7 @@ impl Heap {
     }
 
     /// Interned a string and return the object's content holding the reference.
-    pub(crate) fn take_string(&mut self, s: String) -> Rc<str> {
+    pub(crate) fn intern(&mut self, s: String) -> Rc<str> {
         match self.intern_ids.get(s.as_str()) {
             Some(id) => Rc::clone(&self.intern_str[*id]),
             None => {
