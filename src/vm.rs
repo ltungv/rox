@@ -158,10 +158,6 @@ impl VirtualMachine {
         Ok(stack_size)
     }
 
-    fn stack_remove_top(&mut self, n: usize) {
-        self.stack.drain(self.stack.len() - n..);
-    }
-
     fn stack_pop(&mut self) -> Result<Value, RuntimeError> {
         self.stack.pop().ok_or(RuntimeError::StackExhausted)
     }
@@ -182,9 +178,13 @@ impl VirtualMachine {
         Ok(&mut self.stack[index])
     }
 
+    fn stack_remove_top(&mut self, n: usize) {
+        self.stack.drain(self.stack.len() - n..);
+    }
+
     fn frames_trace(&self) -> Result<(), RuntimeError> {
         for frame in self.frames.iter().rev() {
-            let closure_ref = frame.closure.as_closure()?.borrow();
+            let closure_ref = frame.closure().borrow();
             let fun_ref = closure_ref.fun().borrow();
             let line = fun_ref.chunk.get_line(frame.ip - 1);
             match &fun_ref.name {

@@ -155,10 +155,12 @@ pub(crate) struct ObjClosure {
 }
 
 impl ObjClosure {
+    /// Create a new closure object backed by the given function and upvalues.
     pub(crate) fn new(fun: ObjectRef, upvalues: Vec<ObjectRef>) -> Self {
         Self { fun, upvalues }
     }
 
+    /// Get a reference to the function object.
     pub(crate) fn fun(&self) -> &RefCell<ObjFun> {
         self.fun.as_fun().expect("Expect function object.")
     }
@@ -171,9 +173,14 @@ impl fmt::Display for ObjClosure {
     }
 }
 
+/// An upvalue represented variables that can be captured by a closure.
 #[derive(Debug)]
 pub(crate) enum ObjUpvalue {
+    /// An open upvalue references a stack slot and represents a variable that has not been
+    /// closed over.
     Open(usize),
+    /// A closed upvalue owns a heap-allocated value and represents a variable that has been
+    /// closed over.
     Closed(Value),
 }
 
