@@ -7,7 +7,7 @@ use crate::object::{NativeFun, ObjClosure, ObjFun, ObjUpvalue, Object, ObjectCon
 pub(crate) struct Heap {
     intern_str: Vec<Rc<str>>,
     intern_ids: HashMap<Rc<str>, usize>,
-    head: Option<NonNull<Object>>,
+    head: Option<ObjectRef>,
 }
 
 impl Heap {
@@ -59,8 +59,9 @@ impl Heap {
             content,
         });
         let object_ptr = NonNull::from(Box::leak(object));
-        self.head = Some(object_ptr);
-        ObjectRef(object_ptr)
+        let object = ObjectRef::from(object_ptr);
+        self.head = Some(object);
+        object
     }
 
     /// Remove the object at the head of the linked list.
@@ -70,7 +71,7 @@ impl Heap {
         // we still can access the object from the linked list then it must have not been
         // deallocated.
         self.head.map(|head| {
-            let object = unsafe { Box::from_raw(head.as_ptr()) };
+            let object: Box<Object> = head.into();
             self.head = object.next;
             object.content
         })
@@ -109,7 +110,7 @@ impl IntoIterator for &Heap {
 
 /// An iterator through all currently allocated objects.
 pub(crate) struct HeapIter {
-    next: Option<NonNull<Object>>,
+    next: Option<ObjectRef>,
 }
 
 impl Iterator for HeapIter {
@@ -121,8 +122,8 @@ impl Iterator for HeapIter {
             // SAFETY: If the object was deallocated, it must be removed from the linked list. If
             // we still can access the object from the linked list then it must have not been
             // deallocated.
-            self.next = unsafe { node.as_ref().next };
-            return Some(ObjectRef(node));
+            self.next = node.next;
+            return Some(node);
         }
         None
     }

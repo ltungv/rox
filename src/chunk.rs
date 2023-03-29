@@ -129,8 +129,8 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
             let constant_id = chunk.instructions[offset] as usize;
             let constant = &chunk.constants[constant_id];
             println!("{:-16} {constant_id:4} {constant}", "OP_CLOSURE");
-            let object = constant.as_object().expect("Expect an object.");
-            let fun = object.content.as_fun().expect("Expect a function object.");
+            let object = constant.as_object().expect("Expect object.");
+            let fun = object.as_fun().expect("Expect function object.");
             let upvalue_count = fun.borrow().upvalue_count;
             for _ in 0..upvalue_count {
                 let is_local = chunk.instructions[offset + 1] == 1;

@@ -4,7 +4,7 @@ use std::{
     borrow::Borrow,
     cell::RefCell,
     collections::HashMap,
-    ops::{Add, Deref, DerefMut, Div, Mul, Neg, Not, Sub},
+    ops::{Add, DerefMut, Div, Mul, Neg, Not, Sub},
     rc::Rc,
 };
 
@@ -98,7 +98,8 @@ impl VirtualMachine {
     /// Compile and execute the given source code.
     pub fn interpret(&mut self, src: &str) -> Result<(), InterpretError> {
         let mut parser = Parser::new(src, &mut self.heap);
-        let fun_object = parser.compile().ok_or(InterpretError::Compile)?;
+        let fun = parser.compile().ok_or(InterpretError::Compile)?;
+        let fun_object = self.heap.alloc_fun(fun);
         self.run(fun_object).map_err(|err| {
             eprintln!("{err}");
             if let Err(err) = self.frames_trace() {
@@ -114,10 +115,9 @@ impl VirtualMachine {
         // allocating the closure.
         self.stack_push(Value::Object(fun_object))?;
         // Create a closure for the script function. Note that script can't have upvalues.
-        let closure_object = self.heap.alloc_closure(ObjClosure {
-            fun: fun_object,
-            upvalues: Vec::new(),
-        });
+        let closure_object = self
+            .heap
+            .alloc_closure(ObjClosure::new(fun_object, Vec::new()));
         // Pop the fun object as we no longer need it.
         self.stack_pop()?;
         // Push the closure onto the stack so GC won't remove for the entire runtime.
@@ -184,8 +184,8 @@ impl VirtualMachine {
 
     fn frames_trace(&self) -> Result<(), RuntimeError> {
         for frame in self.frames.iter().rev() {
-            let closure_ref = frame.closure.content.as_closure()?.borrow();
-            let fun_ref = closure_ref.fun.content.as_fun()?.borrow();
+            let closure_ref = frame.closure.as_closure()?.borrow();
+            let fun_ref = closure_ref.fun().borrow();
             let line = fun_ref.chunk.get_line(frame.ip - 1);
             match &fun_ref.name {
                 None => eprintln!("{line} in script."),
@@ -273,8 +273,8 @@ impl<'vm> Task<'vm> {
                 self.vm.heap_trace();
                 self.vm.stack_trace();
                 let frame = self.vm.frame()?;
-                let closure_ref = frame.closure.content.as_closure()?.borrow();
-                let fun_ref = closure_ref.fun.content.as_fun()?.borrow();
+                let closure_ref = frame.closure().borrow();
+                let fun_ref = closure_ref.fun().borrow();
                 disassemble_instruction(&fun_ref.chunk, frame.ip);
             }
             match Opcode::try_from(self.read_byte()?)? {
@@ -338,16 +338,16 @@ impl<'vm> Task<'vm> {
         let frame = self.vm.frame()?;
         let closure = frame.borrow().closure();
         let upvalue_object = closure.borrow().upvalues[upvalue_slot as usize];
-        let upvalue = upvalue_object.borrow().content.as_upvalue()?;
-        match upvalue.borrow().deref() {
+        let upvalue = upvalue_object.borrow().as_upvalue()?;
+        match *upvalue.borrow() {
             // Value is on the stack.
             ObjUpvalue::Open(stack_slot) => {
-                let value = self.vm.stack[*stack_slot];
+                let value = self.vm.stack[stack_slot];
                 self.vm.stack_push(value)?;
             }
             // Value is on the heap.
             ObjUpvalue::Closed(value) => {
-                self.vm.stack_push(*value)?;
+                self.vm.stack_push(value)?;
             }
         }
         Ok(())
@@ -359,7 +359,7 @@ impl<'vm> Task<'vm> {
         let frame = self.vm.frame()?;
         let closure = frame.borrow().closure();
         let upvalue_object = closure.borrow().upvalues[upvalue_slot as usize];
-        let upvalue = upvalue_object.borrow().content.as_upvalue()?;
+        let upvalue = upvalue_object.borrow().as_upvalue()?;
         match upvalue.borrow_mut().deref_mut() {
             // Value is on the stack.
             ObjUpvalue::Open(stack_slot) => self.vm.stack[*stack_slot] = *self.vm.stack_top(0)?,
@@ -372,7 +372,7 @@ impl<'vm> Task<'vm> {
     fn closure(&mut self) -> Result<(), RuntimeError> {
         let constant = self.read_constant()?;
         let fun_object = constant.as_object()?;
-        let fun = fun_object.content.as_fun()?;
+        let fun = fun_object.as_fun()?;
 
         let upvalue_count = fun.borrow().upvalue_count as usize;
         let mut upvalues = Vec::with_capacity(upvalue_count);
@@ -387,10 +387,10 @@ impl<'vm> Task<'vm> {
             }
         }
 
-        let closure = self.vm.heap.alloc_closure(ObjClosure {
-            fun: fun_object,
-            upvalues,
-        });
+        let closure = self
+            .vm
+            .heap
+            .alloc_closure(ObjClosure::new(fun_object, upvalues));
         self.vm.stack_push(Value::Object(closure))?;
 
         Ok(())
@@ -402,7 +402,7 @@ impl<'vm> Task<'vm> {
         // to close over a variable not a value. Thus, closures can shared data through the same
         // captured variable.
         for obj in self.vm.open_upvalues.iter() {
-            let upvalue = obj.borrow().content.as_upvalue()?;
+            let upvalue = obj.borrow().as_upvalue()?;
             if let ObjUpvalue::Open(loc) = *upvalue.borrow() {
                 if loc == location {
                     return Ok(*obj);
@@ -419,7 +419,7 @@ impl<'vm> Task<'vm> {
     // stack slot that went out of scope.
     fn close_upvalues(&mut self, last: usize) -> Result<(), RuntimeError> {
         for obj in self.vm.open_upvalues.iter() {
-            let upvalue = obj.borrow().content.as_upvalue()?;
+            let upvalue = obj.borrow().as_upvalue()?;
             // Check if we reference a slot that went out of scope.
             let stack_slot = match *upvalue.borrow() {
                 ObjUpvalue::Open(slot) if slot >= last => Some(slot),
@@ -486,8 +486,8 @@ impl<'vm> Task<'vm> {
     }
 
     fn call_closure(&mut self, callee: ObjectRef, argc: u8) -> Result<(), RuntimeError> {
-        let closure_ref = callee.content.as_closure()?.borrow();
-        let fun_ref = closure_ref.fun.content.as_fun()?.borrow();
+        let closure_ref = callee.as_closure()?.borrow();
+        let fun_ref = closure_ref.fun().borrow();
 
         let arity = fun_ref.arity;
         if argc != arity {
@@ -574,7 +574,7 @@ impl<'vm> Task<'vm> {
     fn get_global(&mut self) -> Result<(), RuntimeError> {
         let constant = self.read_constant()?;
         let object = constant.as_object()?;
-        let name = object.content.as_string()?;
+        let name = object.as_string()?;
         let value = self
             .vm
             .globals
@@ -588,7 +588,7 @@ impl<'vm> Task<'vm> {
     fn set_global(&mut self) -> Result<(), RuntimeError> {
         let constant = self.read_constant()?;
         let object = constant.as_object()?;
-        let name = object.content.as_string()?;
+        let name = object.as_string()?;
         let value = self.vm.stack_top(0)?;
         if !self.vm.globals.contains_key(&name) {
             return Err(RuntimeError::UndefinedVariable(name.to_string()));
@@ -600,7 +600,7 @@ impl<'vm> Task<'vm> {
     /// Declare a variable with some initial value.
     fn defined_global(&mut self) -> Result<(), RuntimeError> {
         let constant = self.read_constant()?;
-        let global_name = constant.as_object()?.content.as_string()?;
+        let global_name = constant.as_object()?.as_string()?;
         let global_value = self.vm.stack_pop()?;
         self.vm.globals.insert(global_name, global_value);
         Ok(())
@@ -616,42 +616,42 @@ impl<'vm> Task<'vm> {
     fn ne(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = Value::Bool(lhs.deref().ne(&rhs));
+        *lhs = Value::Bool((*lhs).ne(&rhs));
         Ok(())
     }
 
     fn eq(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = Value::Bool(lhs.deref().eq(&rhs));
+        *lhs = Value::Bool((*lhs).eq(&rhs));
         Ok(())
     }
 
     fn gt(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = Value::Bool(lhs.deref().gt(&rhs)?);
+        *lhs = Value::Bool((*lhs).gt(&rhs)?);
         Ok(())
     }
 
     fn ge(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = Value::Bool(lhs.deref().ge(&rhs)?);
+        *lhs = Value::Bool((*lhs).ge(&rhs)?);
         Ok(())
     }
 
     fn lt(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = Value::Bool(lhs.deref().lt(&rhs)?);
+        *lhs = Value::Bool((*lhs).lt(&rhs)?);
         Ok(())
     }
 
     fn le(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = Value::Bool(lhs.deref().le(&rhs)?);
+        *lhs = Value::Bool((*lhs).le(&rhs)?);
         Ok(())
     }
 
@@ -688,21 +688,21 @@ impl<'vm> Task<'vm> {
     fn sub(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = lhs.deref().sub(&rhs)?;
+        *lhs = lhs.sub(&rhs)?;
         Ok(())
     }
 
     fn mul(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = lhs.deref().mul(&rhs)?;
+        *lhs = lhs.mul(&rhs)?;
         Ok(())
     }
 
     fn div(&mut self) -> Result<(), RuntimeError> {
         let rhs = self.vm.stack_pop()?;
         let lhs = self.vm.stack_top_mut(0)?;
-        *lhs = lhs.deref().div(&rhs)?;
+        *lhs = lhs.div(&rhs)?;
         Ok(())
     }
 
@@ -733,17 +733,14 @@ struct CallFrame {
 
 impl CallFrame {
     fn closure(&self) -> &RefCell<ObjClosure> {
-        self.closure
-            .content
-            .as_closure()
-            .expect("Expect function object.")
+        self.closure.as_closure().expect("Expect closure object.")
     }
 
     /// Read the next byte in the stream of bytecode instructions.
     fn read_byte(&mut self) -> Result<u8, RuntimeError> {
         let byte = {
             let closure_ref = self.closure().borrow();
-            let fun_ref = closure_ref.fun.content.as_fun()?.borrow();
+            let fun_ref = closure_ref.fun().borrow();
             fun_ref.chunk.instructions[self.ip]
         };
         self.ip += 1;
@@ -754,7 +751,7 @@ impl CallFrame {
     fn read_short(&mut self) -> Result<u16, RuntimeError> {
         let short = {
             let closure_ref = self.closure().borrow();
-            let fun_ref = closure_ref.fun.content.as_fun()?.borrow();
+            let fun_ref = closure_ref.fun().borrow();
             let hi = fun_ref.chunk.instructions[self.ip] as u16;
             let lo = fun_ref.chunk.instructions[self.ip + 1] as u16;
             hi << 8 | lo
@@ -768,7 +765,7 @@ impl CallFrame {
     fn read_constant(&mut self) -> Result<Value, RuntimeError> {
         let constant_id = self.read_byte()? as usize;
         let closure_ref = self.closure().borrow();
-        let fun_ref = closure_ref.fun.content.as_fun()?.borrow();
+        let fun_ref = closure_ref.fun().borrow();
         Ok(fun_ref.chunk.constants[constant_id])
     }
 }

@@ -10,7 +10,63 @@ pub enum ObjectError {
 
 /// A reference to the heap-allocated object.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ObjectRef(pub(crate) NonNull<Object>);
+pub(crate) struct ObjectRef(NonNull<Object>);
+
+impl ObjectRef {
+    /// Cast the object to a string reference.
+    pub(crate) fn as_string(&self) -> Result<Rc<str>, ObjectError> {
+        match &self.content {
+            ObjectContent::String(s) => Ok(Rc::clone(s)),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
+
+    /// Cast the object to a upvalue reference.
+    pub(crate) fn as_upvalue(&self) -> Result<&RefCell<ObjUpvalue>, ObjectError> {
+        match &self.content {
+            ObjectContent::Upvalue(u) => Ok(u),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
+
+    /// Cast the object to a closure reference.
+    pub(crate) fn as_closure(&self) -> Result<&RefCell<ObjClosure>, ObjectError> {
+        match &self.content {
+            ObjectContent::Closure(c) => Ok(c),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
+
+    /// Cast the object to a function reference.
+    pub(crate) fn as_fun(&self) -> Result<&RefCell<ObjFun>, ObjectError> {
+        match &self.content {
+            ObjectContent::Fun(f) => Ok(f),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
+}
+
+impl From<NonNull<Object>> for ObjectRef {
+    fn from(value: NonNull<Object>) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Box<Object>> for ObjectRef {
+    fn from(value: Box<Object>) -> Self {
+        let object_ptr = NonNull::from(Box::leak(value));
+        Self::from(object_ptr)
+    }
+}
+
+impl From<ObjectRef> for Box<Object> {
+    #[allow(unsafe_code)]
+    fn from(value: ObjectRef) -> Box<Object> {
+        // SAFETY: If we still own a handle then the underlying must not be deallocated. Thus, it's
+        // consume and box it.
+        unsafe { Box::from_raw(value.0.as_ptr()) }
+    }
+}
 
 impl ops::Deref for ObjectRef {
     type Target = Object;
@@ -44,7 +100,7 @@ impl fmt::Display for ObjectRef {
 #[derive(Debug)]
 pub(crate) struct Object {
     /// A pointer to the next object in the linked list of allocated objects.
-    pub(crate) next: Option<NonNull<Object>>,
+    pub(crate) next: Option<ObjectRef>,
     /// The object's data.
     pub(crate) content: ObjectContent,
 }
@@ -76,40 +132,6 @@ pub(crate) enum ObjectContent {
     // BoundMethod(Gc<ObjBoundMethod>),
 }
 
-impl ObjectContent {
-    /// Cast the object to a string reference.
-    pub(crate) fn as_string(&self) -> Result<Rc<str>, ObjectError> {
-        match self {
-            Self::String(s) => Ok(Rc::clone(s)),
-            _ => Err(ObjectError::InvalidCast),
-        }
-    }
-
-    /// Cast the object to a upvalue reference.
-    pub(crate) fn as_upvalue(&self) -> Result<&RefCell<ObjUpvalue>, ObjectError> {
-        match self {
-            Self::Upvalue(u) => Ok(u),
-            _ => Err(ObjectError::InvalidCast),
-        }
-    }
-
-    /// Cast the object to a closure reference.
-    pub(crate) fn as_closure(&self) -> Result<&RefCell<ObjClosure>, ObjectError> {
-        match self {
-            Self::Closure(c) => Ok(c),
-            _ => Err(ObjectError::InvalidCast),
-        }
-    }
-
-    /// Cast the object to a function reference.
-    pub(crate) fn as_fun(&self) -> Result<&RefCell<ObjFun>, ObjectError> {
-        match self {
-            Self::Fun(f) => Ok(f),
-            _ => Err(ObjectError::InvalidCast),
-        }
-    }
-}
-
 impl fmt::Display for ObjectContent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         match self {
@@ -127,14 +149,24 @@ impl fmt::Display for ObjectContent {
 
 #[derive(Debug)]
 pub(crate) struct ObjClosure {
-    /// The name of the function
-    pub(crate) fun: ObjectRef,
+    // The function definition of this closure.
+    fun: ObjectRef,
     pub(crate) upvalues: Vec<ObjectRef>,
+}
+
+impl ObjClosure {
+    pub(crate) fn new(fun: ObjectRef, upvalues: Vec<ObjectRef>) -> Self {
+        Self { fun, upvalues }
+    }
+
+    pub(crate) fn fun(&self) -> &RefCell<ObjFun> {
+        self.fun.as_fun().expect("Expect function object.")
+    }
 }
 
 impl fmt::Display for ObjClosure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        let fun = self.fun.content.as_fun().expect("Expect function object.");
+        let fun = self.fun.as_fun().expect("Expect function object.");
         write!(f, "{}", fun.borrow())
     }
 }

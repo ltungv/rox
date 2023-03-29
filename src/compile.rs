@@ -2,12 +2,11 @@
 
 use crate::{
     heap::Heap,
-    object::{ObjFun, ObjectRef},
+    object::ObjFun,
     opcode::Opcode,
     scan::{Kind, Line, Scanner, Token},
     value::Value,
 };
-use std::cell::RefCell;
 
 #[cfg(debug_assertions)]
 use crate::chunk::disassemble_chunk;
@@ -91,7 +90,7 @@ pub(crate) struct Parser<'src, 'vm> {
 impl<'src, 'vm> Parser<'src, 'vm> {
     /// Create a new parser that reads the given source string.
     pub(crate) fn new(src: &'src str, heap: &'vm mut Heap) -> Self {
-        let fun = heap.alloc_fun(ObjFun::new(None));
+        let fun = ObjFun::new(None);
         Self {
             had_error: false,
             panicking: false,
@@ -104,7 +103,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     /// Compile the source and returns its chunk.
-    pub(crate) fn compile(&mut self) -> Option<ObjectRef> {
+    pub(crate) fn compile(&mut self) -> Option<ObjFun> {
         self.build();
         let compiler = self.take();
         if self.had_error {
@@ -116,14 +115,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn take(&mut self) -> Compiler<'src> {
         self.emit_return();
-        let compiler = self.compilers.pop().expect("Invalid state.");
-        let fun = compiler.fun();
-        fun.borrow_mut().upvalue_count = compiler.upvalues.len() as u8;
+        let mut compiler = self.compilers.pop().expect("Invalid state.");
+        compiler.fun.upvalue_count = compiler.upvalues.len() as u8;
         #[cfg(debug_assertions)]
         {
-            match &fun.borrow().name {
-                None => disassemble_chunk(&fun.borrow().chunk, "code"),
-                Some(s) => disassemble_chunk(&fun.borrow().chunk, s),
+            match &compiler.fun.name {
+                None => disassemble_chunk(&compiler.fun.chunk, "code"),
+                Some(s) => disassemble_chunk(&compiler.fun.chunk, s),
             };
         }
         compiler
@@ -238,21 +236,21 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn function(&mut self, fun_type: FunctionType) {
         // Interned the function name and allocate a new function.
         let fun_name = self.heap.take_string(String::from(self.token_prev.lexeme));
-        let fun = self.heap.alloc_fun(ObjFun::new(Some(fun_name)));
-        self.compilers.push(Compiler::new(fun, fun_type));
+        self.compilers
+            .push(Compiler::new(ObjFun::new(Some(fun_name)), fun_type));
 
         self.begin_scope();
         self.consume(Kind::LParen, "Expect '(' after function name.");
         if !self.check_curr(Kind::RParen) {
             loop {
-                let fun = self.fun(0);
-                if fun.borrow().arity as usize == MAX_PARAMS {
+                let fun = &mut self.compiler_mut(0).fun;
+                if fun.arity as usize == MAX_PARAMS {
                     self.error_curr("Can't have more than 255 parameters.");
                     return;
                 }
 
                 // Treat params like variables.
-                fun.borrow_mut().arity += 1;
+                fun.arity += 1;
                 let ident_id = self.parse_variable("Expect parameter name.");
                 self.define_variable(ident_id);
 
@@ -267,7 +265,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
         // Create a constant for the compiled function.
         let compiler = self.take();
-        let constant_id = self.make_constant(Value::Object(compiler.fun));
+        let fun_object = self.heap.alloc_fun(compiler.fun);
+        let constant_id = self.make_constant(Value::Object(fun_object));
         self.emit(Opcode::Closure);
         self.emit_byte(constant_id);
 
@@ -494,7 +493,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// ```
     fn while_statement(&mut self) {
         // Track the start of the loop where we can jump back to.
-        let loop_start = self.fun(0).borrow().chunk.instructions.len();
+        let loop_start = self.compiler(0).fun.chunk.instructions.len();
         // Conditional part.
         self.consume(Kind::LParen, "Expect '(' after 'while'.");
         self.expression();
@@ -533,7 +532,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.expression_statement();
         }
         // Loop's condition.
-        let loop_start = self.fun(0).borrow().chunk.instructions.len();
+        let loop_start = self.compiler(0).fun.chunk.instructions.len();
         let jump_exit = if self.advance_if(Kind::Semicolon) {
             // The conditional part is empty, so we don't have to emit a jump instruction.
             None
@@ -556,7 +555,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             // executed first.
             let jump_to_body = self.emit_jump(Opcode::Jump);
             // Keep track of the incrementer's starting position.
-            let increment_start = self.fun(0).borrow().chunk.instructions.len();
+            let increment_start = self.compiler(0).fun.chunk.instructions.len();
             // Parse expression and ignore its result at runtime.
             self.expression();
             self.emit(Opcode::Pop);
@@ -1001,13 +1000,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Write the byte representing the given opcode into the current compiling chunk.
     fn emit(&mut self, opcode: Opcode) {
         let line = self.token_prev.line;
-        self.fun(0).borrow_mut().chunk.write(opcode, line);
+        self.compiler_mut(0).fun.chunk.write(opcode, line);
     }
 
     /// Write the byte into the current compiling chunk.
     fn emit_byte(&mut self, byte: u8) {
         let line = self.token_prev.line;
-        self.fun(0).borrow_mut().chunk.write_byte(byte, line);
+        self.compiler_mut(0).fun.chunk.write_byte(byte, line);
     }
 
     /// Emit a jump instruction along with a 16-byte placeholder for the offset.
@@ -1015,14 +1014,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit(opcode);
         self.emit_byte(0xff);
         self.emit_byte(0xff);
-        self.fun(0).borrow().chunk.instructions.len() - 2
+        self.compiler(0).fun.chunk.instructions.len() - 2
     }
 
     /// Emit a loop instruction along with a 16-byte placeholder for the offset.
     fn emit_loop(&mut self, start: usize) {
         self.emit(Opcode::Loop);
         // We do +2 to adjust for the 2 offset bytes.
-        let jump = self.fun(0).borrow().chunk.instructions.len() - start + 2;
+        let jump = self.compiler(0).fun.chunk.instructions.len() - start + 2;
         if jump > u16::MAX.into() {
             self.error_prev("Loop body too large.");
         } else {
@@ -1049,20 +1048,20 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn patch_jump(&mut self, offset: usize) {
         // We do -2 to adjust for the 2 offset bytes.
-        let jump = self.fun(0).borrow().chunk.instructions.len() - offset - 2;
+        let jump = self.compiler(0).fun.chunk.instructions.len() - offset - 2;
         if jump > u16::MAX.into() {
             self.error_prev("Too much code to jump over.");
         } else {
             let hi = (jump >> 8) & 0xff;
             let lo = jump & 0xff;
-            self.fun(0).borrow_mut().chunk.instructions[offset] = hi as u8;
-            self.fun(0).borrow_mut().chunk.instructions[offset + 1] = lo as u8;
+            self.compiler_mut(0).fun.chunk.instructions[offset] = hi as u8;
+            self.compiler_mut(0).fun.chunk.instructions[offset + 1] = lo as u8;
         }
     }
 
     /// Write a constant to the currently compiling chunk.
     fn make_constant(&mut self, value: Value) -> u8 {
-        let constant_id = self.fun(0).borrow_mut().chunk.write_constant(value);
+        let constant_id = self.compiler_mut(0).fun.chunk.write_constant(value);
         if constant_id >= MAX_CONSTANTS {
             self.error_prev("Too many constants in one chunk.");
             return 0;
@@ -1094,10 +1093,6 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             }
             self.compiler_mut(0).locals.pop();
         }
-    }
-
-    fn fun(&self, height: usize) -> &RefCell<ObjFun> {
-        self.compiler(height).fun()
     }
 
     fn compiler(&self, height: usize) -> &Compiler<'src> {
@@ -1210,7 +1205,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 /// A structure for tracking the compiler current scoped states.
 #[derive(Debug)]
 struct Compiler<'src> {
-    fun: ObjectRef,
+    fun: ObjFun,
     fun_type: FunctionType,
     /// The number of "blocks" surrounding the current piece of code that we're compiling.
     scope_depth: isize,
@@ -1221,7 +1216,7 @@ struct Compiler<'src> {
 }
 
 impl<'src> Compiler<'src> {
-    fn new(fun: ObjectRef, fun_type: FunctionType) -> Self {
+    fn new(fun: ObjFun, fun_type: FunctionType) -> Self {
         Self {
             fun,
             fun_type,
@@ -1233,10 +1228,6 @@ impl<'src> Compiler<'src> {
             }],
             upvalues: vec![],
         }
-    }
-
-    fn fun(&self) -> &RefCell<ObjFun> {
-        self.fun.content.as_fun().expect("Expect function object.")
     }
 }
 
