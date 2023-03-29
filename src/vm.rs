@@ -68,6 +68,7 @@ pub struct VirtualMachine {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
     globals: HashMap<Rc<str>, Value>,
+    open_upvalues: Vec<ObjectRef>,
     heap: Heap,
 }
 
@@ -84,6 +85,7 @@ impl VirtualMachine {
             stack: Vec::default(),
             frames: Vec::default(),
             globals: HashMap::default(),
+            open_upvalues: Vec::default(),
             heap: Heap::default(),
         };
         vm.define_native("clock", 0, clock_native)
@@ -315,6 +317,10 @@ impl<'vm> Task<'vm> {
                 Opcode::Loop => self.jump(JumpDirection::Backward)?,
                 Opcode::Call => self.call()?,
                 Opcode::Closure => self.closure()?,
+                Opcode::CloseUpvalue => {
+                    self.close_upvalues(self.vm.stack.len() - 1)?;
+                    self.vm.stack_pop()?;
+                }
                 Opcode::Ret => {
                     if self.ret()? {
                         break;
@@ -326,31 +332,39 @@ impl<'vm> Task<'vm> {
         Ok(())
     }
 
+    /// Get the value of the variable capture by an upvalue.
     fn get_upvalue(&mut self) -> Result<(), RuntimeError> {
-        let upvalue_slot = self.read_byte()? as usize;
+        let upvalue_slot = self.read_byte()?;
         let frame = self.vm.frame()?;
         let closure = frame.borrow().closure();
-        let upvalue_object = closure.borrow().upvalues[upvalue_slot];
+        let upvalue_object = closure.borrow().upvalues[upvalue_slot as usize];
         let upvalue = upvalue_object.borrow().content.as_upvalue()?;
         match upvalue.borrow().deref() {
+            // Value is on the stack.
             ObjUpvalue::Open(stack_slot) => {
                 let value = self.vm.stack[*stack_slot];
                 self.vm.stack_push(value)?;
             }
-            ObjUpvalue::Closed(_) => todo!(),
+            // Value is on the heap.
+            ObjUpvalue::Closed(value) => {
+                self.vm.stack_push(*value)?;
+            }
         }
         Ok(())
     }
 
+    /// Set the value of the variable capture by an upvalue.
     fn set_upvalue(&mut self) -> Result<(), RuntimeError> {
-        let upvalue_slot = self.read_byte()? as usize;
+        let upvalue_slot = self.read_byte()?;
         let frame = self.vm.frame()?;
         let closure = frame.borrow().closure();
-        let upvalue_object = closure.borrow().upvalues[upvalue_slot];
+        let upvalue_object = closure.borrow().upvalues[upvalue_slot as usize];
         let upvalue = upvalue_object.borrow().content.as_upvalue()?;
         match upvalue.borrow_mut().deref_mut() {
+            // Value is on the stack.
             ObjUpvalue::Open(stack_slot) => self.vm.stack[*stack_slot] = *self.vm.stack_top(0)?,
-            ObjUpvalue::Closed(_) => todo!(),
+            // Value is on the heap.
+            ObjUpvalue::Closed(value) => *value = *self.vm.stack_top(0)?,
         }
         Ok(())
     }
@@ -366,7 +380,7 @@ impl<'vm> Task<'vm> {
             let is_local = self.read_byte()? == 1;
             let index = self.read_byte()? as usize;
             if is_local {
-                upvalues.push(self.capture_upvalue(self.vm.frame()?.slot + index));
+                upvalues.push(self.capture_upvalue(self.vm.frame()?.slot + index)?);
             } else {
                 let closure = self.vm.frame()?.closure();
                 upvalues.push(closure.borrow().upvalues[index]);
@@ -382,18 +396,65 @@ impl<'vm> Task<'vm> {
         Ok(())
     }
 
-    fn capture_upvalue(&mut self, location: usize) -> ObjectRef {
-        self.vm.heap.alloc_upvalue(ObjUpvalue::Open(location))
+    /// Create an open upvalue capturing the variable at the stack index given by `location`.
+    fn capture_upvalue(&mut self, location: usize) -> Result<ObjectRef, RuntimeError> {
+        // Check if there's an existing open upvalues that references the same stack slot. We want
+        // to close over a variable not a value. Thus, closures can shared data through the same
+        // captured variable.
+        for obj in self.vm.open_upvalues.iter() {
+            let upvalue = obj.borrow().content.as_upvalue()?;
+            if let ObjUpvalue::Open(loc) = *upvalue.borrow() {
+                if loc == location {
+                    return Ok(*obj);
+                }
+            }
+        }
+        // Make a new open upvalue.
+        let upvalue = self.vm.heap.alloc_upvalue(ObjUpvalue::Open(location));
+        self.vm.open_upvalues.push(upvalue);
+        Ok(upvalue)
     }
 
+    // Close all upvalues whose referenced stack slot went out of scope. Here, `last` is the lowest
+    // stack slot that went out of scope.
+    fn close_upvalues(&mut self, last: usize) -> Result<(), RuntimeError> {
+        for obj in self.vm.open_upvalues.iter() {
+            let upvalue = obj.borrow().content.as_upvalue()?;
+            // Check if we reference a slot that went out of scope.
+            let stack_slot = match *upvalue.borrow() {
+                ObjUpvalue::Open(slot) if slot >= last => Some(slot),
+                _ => None,
+            };
+            // Hoist the variable up into the upvalue so it can live after the stack frame is pop.
+            if let Some(slot) = stack_slot {
+                upvalue.replace(ObjUpvalue::Closed(self.vm.stack[slot]));
+            }
+        }
+        // remove closed upvalues from list of open upvalues
+        self.vm.open_upvalues.retain(|v| match &v.content {
+            ObjectContent::Upvalue(upvalue) => matches!(*upvalue.borrow(), ObjUpvalue::Open(_)),
+            _ => false,
+        });
+        Ok(())
+    }
+
+    /// Return from a function call
     fn ret(&mut self) -> Result<bool, RuntimeError> {
+        // Get the result of the function.
         let result = self.vm.stack_pop()?;
+        // The compiler didn't emit Opcode::CloseUpvalue at the end of each of the outer most scope
+        // that defines the body. That scope contains function parameters and also local variables
+        // that need to be closed over.
+        self.close_upvalues(self.vm.frame()?.slot)?;
         let frame = self.vm.frames_pop()?;
         if self.vm.frames.is_empty() {
+            // Have reach the end of the script if there's no stack frame left.
             self.vm.stack_pop()?;
             return Ok(true);
         }
+        // Pop all data related to the stack frame.
         self.vm.stack_remove_top(self.vm.stack.len() - frame.slot);
+        // Put the function result on the stack.
         self.vm.stack_push(result)?;
         Ok(false)
     }

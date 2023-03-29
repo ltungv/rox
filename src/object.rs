@@ -141,7 +141,7 @@ impl fmt::Display for ObjClosure {
 #[derive(Debug)]
 pub(crate) enum ObjUpvalue {
     Open(usize),
-    Closed(ObjectRef),
+    Closed(Value),
 }
 
 impl fmt::Display for ObjUpvalue {

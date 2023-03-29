@@ -329,6 +329,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let local = Local {
             name: name.lexeme,
             depth: -1,
+            is_captured: false,
         };
         compiler.locals.push(local);
     }
@@ -909,11 +910,17 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             // There's no compiler at this height
             return None;
         }
-        // Find a matching local variable in the enclosing scope.
+        // Find a matching local variable in the enclosing function.
         if let Some(local) = self.resolve_local(name, height + 1) {
+            // Mark the variable in the enclosing function as captured so we know to emit the
+            // correct opcode for hoisting up the upvalue.
+            self.compiler_mut(height + 1).locals[local as usize].is_captured = true;
             return Some(self.add_upvalue(height, local, true));
         }
-        // Find a matching upvalue in the enclosing
+        // Find a matching upvalue in the enclosing function. An upvalue is like a node in a linked
+        // list where its can references:
+        // 1. Local variable of the immediately enclosing function.
+        // 2. Upvalues of enclosing functions that are not the immediately enclosing one..
         if let Some(upvalue) = self.resolve_upvalue(name, height + 1) {
             return Some(self.add_upvalue(height, upvalue, false));
         }
@@ -1078,8 +1085,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             if local.depth <= self.compiler(0).scope_depth {
                 break;
             }
-            // Variables at the scope bellow get popped out of the stack.
-            self.emit(Opcode::Pop);
+            // Variables at the scope bellow get popped out of the stack. If the variable is
+            // captured by some closure, we hoist it up into the heap.
+            if local.is_captured {
+                self.emit(Opcode::CloseUpvalue);
+            } else {
+                self.emit(Opcode::Pop);
+            }
             self.compiler_mut(0).locals.pop();
         }
     }
@@ -1214,7 +1226,11 @@ impl<'src> Compiler<'src> {
             fun,
             fun_type,
             scope_depth: 0,
-            locals: vec![Local { name: "", depth: 0 }],
+            locals: vec![Local {
+                name: "",
+                depth: 0,
+                is_captured: false,
+            }],
             upvalues: vec![],
         }
     }
@@ -1243,6 +1259,8 @@ struct Local<'src> {
     name: &'src str,
     /// The scope depth in which the local variable was declared.
     depth: isize,
+    /// The flag to check where this local variable is captured by some closure.
+    is_captured: bool,
 }
 
 /// All precedence levels in Lox.

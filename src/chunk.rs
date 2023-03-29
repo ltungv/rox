@@ -132,6 +132,7 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
             }
             offset
         }
+        Opcode::CloseUpvalue => disassemble_simple(offset, "OP_CLOSE_UPVALUE"),
         Opcode::Ret => disassemble_simple(offset, "OP_RET"),
         _ => unreachable!(),
     }
