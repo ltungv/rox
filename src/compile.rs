@@ -8,7 +8,7 @@ use crate::{
     value::Value,
 };
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "dbg-execution")]
 use crate::chunk::disassemble_chunk;
 
 /// Max number of constants a chunk can contain.
@@ -103,7 +103,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     /// Compile the source and returns its chunk.
-    pub(crate) fn compile(&mut self) -> Option<ObjFun> {
+    pub(crate) fn compile(mut self) -> Option<ObjFun> {
         self.build();
         let compiler = self.take();
         if self.had_error {
@@ -117,13 +117,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit_return();
         let mut compiler = self.compilers.pop().expect("Invalid state.");
         compiler.fun.upvalue_count = compiler.upvalues.len() as u8;
-        #[cfg(debug_assertions)]
-        {
-            match &compiler.fun.name {
-                None => disassemble_chunk(&compiler.fun.chunk, "code"),
-                Some(s) => disassemble_chunk(&compiler.fun.chunk, s),
-            };
-        }
+
+        #[cfg(feature = "dbg-execution")]
+        match &compiler.fun.name {
+            None => disassemble_chunk(&compiler.fun.chunk, "code"),
+            Some(s) => disassemble_chunk(&compiler.fun.chunk, s),
+        };
+
         compiler
     }
 
@@ -1226,7 +1226,7 @@ impl<'src> Compiler<'src> {
                 depth: 0,
                 is_captured: false,
             }],
-            upvalues: vec![],
+            upvalues: Vec::default(),
         }
     }
 }

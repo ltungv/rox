@@ -1,23 +1,21 @@
 //! Implementation of the bytecode virtual machine.
 
 use std::{
-    borrow::Borrow,
-    cell::RefCell,
     collections::HashMap,
-    ops::{Add, DerefMut, Div, Mul, Neg, Not, Sub},
+    ops::{Add, Div, Mul, Neg, Not, Sub},
     rc::Rc,
 };
 
 use crate::{
     compile::Parser,
     heap::Heap,
-    object::{NativeFun, ObjClosure, ObjUpvalue, ObjectContent, ObjectError, ObjectRef},
+    object::{NativeFun, ObjClosure, ObjFun, ObjUpvalue, ObjectContent, ObjectError, ObjectRef},
     opcode::Opcode,
     value::{Value, ValueError},
     InterpretError,
 };
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "dbg-execution")]
 use crate::chunk::disassemble_instruction;
 
 /// The max number of values can be put onto the virtual machine's stack.
@@ -63,8 +61,8 @@ pub enum RuntimeError {
 pub struct VirtualMachine {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
-    globals: HashMap<Rc<str>, Value>,
     open_upvalues: Vec<ObjectRef>,
+    globals: HashMap<Rc<str>, Value>,
     heap: Heap,
 }
 
@@ -80,8 +78,8 @@ impl VirtualMachine {
         let mut vm = Self {
             stack: Vec::default(),
             frames: Vec::default(),
-            globals: HashMap::default(),
             open_upvalues: Vec::default(),
+            globals: HashMap::default(),
             heap: Heap::default(),
         };
         vm.define_native("clock", 0, clock_native)
@@ -93,12 +91,11 @@ impl VirtualMachine {
 impl VirtualMachine {
     /// Compile and execute the given source code.
     pub fn interpret(&mut self, src: &str) -> Result<(), InterpretError> {
-        let mut parser = Parser::new(src, &mut self.heap);
+        let parser = Parser::new(src, &mut self.heap);
         let fun = parser.compile().ok_or(InterpretError::Compile)?;
-        let fun_object = self.heap.alloc_fun(fun);
-        self.run(fun_object).map_err(|err| {
+        self.run(fun).map_err(|err| {
             eprintln!("{err}");
-            if let Err(err) = self.frames_trace() {
+            if let Err(err) = self.trace_calls() {
                 eprintln!("{err}");
             };
             self.stack.clear();
@@ -106,16 +103,23 @@ impl VirtualMachine {
         })
     }
 
-    fn run(&mut self, fun_object: ObjectRef) -> Result<(), RuntimeError> {
-        // Push the fun object onto the stack so GC won't remove it while we
-        // allocating the closure.
+    fn run(&mut self, fun: ObjFun) -> Result<(), RuntimeError> {
+        // Push the constant onto the stack so GC won't remove it while allocating the function.
+        for constant in &fun.chunk.constants {
+            self.stack_push(*constant)?;
+        }
+        let constant_count = fun.chunk.constants.len();
+        let fun_object = self.alloc_fun(fun);
+        // Remove all added constants.
+        self.stack_remove_top(constant_count);
+
+        // Push the function onto the stack so GC won't remove it while we allocating the closure.
         self.stack_push(Value::Object(fun_object))?;
         // Create a closure for the script function. Note that script can't have upvalues.
-        let closure_object = self
-            .heap
-            .alloc_closure(ObjClosure::new(fun_object, Vec::new()));
+        let closure_object = self.alloc_closure(ObjClosure::new(fun_object, Vec::new()));
         // Pop the fun object as we no longer need it.
         self.stack_pop();
+
         // Push the closure onto the stack so GC won't remove for the entire runtime.
         self.stack_push(Value::Object(closure_object))?;
         // Start running the closure.
@@ -174,10 +178,10 @@ impl VirtualMachine {
         self.stack.drain(self.stack.len() - n..);
     }
 
-    fn frames_trace(&self) -> Result<(), RuntimeError> {
+    fn trace_calls(&self) -> Result<(), RuntimeError> {
         for frame in self.frames.iter().rev() {
-            let closure_ref = frame.closure().borrow();
-            let fun_ref = closure_ref.fun().borrow();
+            let closure_ref = frame.closure();
+            let fun_ref = closure_ref.fun();
             let line = fun_ref.chunk.get_line(frame.ip - 1);
             match &fun_ref.name {
                 None => eprintln!("{line} in script."),
@@ -195,27 +199,95 @@ impl VirtualMachine {
     ) -> Result<(), RuntimeError> {
         let fun_name = self.heap.intern(String::from(name));
         let fun = NativeFun { arity, call };
-        let fun_object = self.heap.alloc_native_fun(fun);
+        let fun_object = self.alloc_native_fun(fun);
         self.stack_push(Value::Object(fun_object))?;
         self.globals.insert(fun_name, *self.stack_top(0));
         self.stack_pop();
         Ok(())
     }
 
-    #[cfg(debug_assertions)]
-    fn stack_trace(&self) {
+    fn alloc_string(&mut self, s: String) -> ObjectRef {
+        self.gc();
+        self.heap.alloc_string(s)
+    }
+
+    fn alloc_upvalue(&mut self, upvalue: ObjUpvalue) -> ObjectRef {
+        self.gc();
+        self.heap.alloc_upvalue(upvalue)
+    }
+
+    fn alloc_closure(&mut self, closure: ObjClosure) -> ObjectRef {
+        self.gc();
+        self.heap.alloc_closure(closure)
+    }
+
+    fn alloc_fun(&mut self, fun: ObjFun) -> ObjectRef {
+        self.gc();
+        self.heap.alloc_fun(fun)
+    }
+
+    fn alloc_native_fun(&mut self, native_fun: NativeFun) -> ObjectRef {
+        self.gc();
+        self.heap.alloc_native_fun(native_fun)
+    }
+
+    fn gc(&mut self) {
+        if self.heap.size() <= self.heap.next_gc() {
+            return;
+        }
+
+        #[cfg(feature = "dbg-heap")]
+        let before = {
+            println!("-- gc begin");
+            self.heap.size()
+        };
+
+        self.mark_sweep();
+
+        #[cfg(feature = "dbg-heap")]
+        {
+            let after = self.heap.size();
+            let next = self.heap.next_gc();
+            let delta = before.abs_diff(after);
+            println!("-- gc end");
+            println!("   collected {delta} bytes (from {before} to {after}) next at {next}");
+        };
+    }
+
+    fn mark_sweep(&mut self) {
+        let mut grey_objects = self.mark_roots();
+        while let Some(mut grey_object) = grey_objects.pop() {
+            grey_object.mark_references(&mut grey_objects)
+        }
+        self.heap.sweep();
+    }
+
+    fn mark_roots(&mut self) -> Vec<ObjectRef> {
+        let mut grey_objects = Vec::new();
+        for value in &mut self.stack {
+            if let Value::Object(o) = value {
+                o.mark(&mut grey_objects);
+            }
+        }
+        for frame in &mut self.frames {
+            frame.closure.mark(&mut grey_objects);
+        }
+        for upvalue in &mut self.open_upvalues {
+            upvalue.mark(&mut grey_objects);
+        }
+        for value in self.globals.values_mut() {
+            if let Value::Object(ref mut o) = value {
+                o.mark(&mut grey_objects);
+            }
+        }
+        grey_objects
+    }
+
+    #[cfg(feature = "dbg-execution")]
+    fn trace_stack(&self) {
         print!("          ");
         for value in self.stack.iter() {
             print!("[ {value} ]");
-        }
-        println!();
-    }
-
-    #[cfg(debug_assertions)]
-    fn heap_trace(&self) {
-        print!("          ");
-        for object in self.heap.into_iter() {
-            print!("[ {object} ]");
         }
         println!();
     }
@@ -260,15 +332,15 @@ impl<'vm> Task<'vm> {
 impl<'vm> Task<'vm> {
     fn run(&mut self) -> Result<(), RuntimeError> {
         loop {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "dbg-execution")]
             {
-                self.vm.heap_trace();
-                self.vm.stack_trace();
+                self.vm.trace_stack();
                 let frame = self.vm.frame();
-                let closure_ref = frame.closure().borrow();
-                let fun_ref = closure_ref.fun().borrow();
+                let closure_ref = frame.closure();
+                let fun_ref = closure_ref.fun();
                 disassemble_instruction(&fun_ref.chunk, frame.ip);
             }
+
             match Opcode::try_from(self.read_byte()?)? {
                 Opcode::Const => self.constant()?,
                 Opcode::Nil => {
@@ -328,10 +400,10 @@ impl<'vm> Task<'vm> {
     fn get_upvalue(&mut self) -> Result<(), RuntimeError> {
         let upvalue_slot = self.read_byte()?;
         let frame = self.vm.frame();
-        let closure = frame.borrow().closure();
-        let upvalue_object = closure.borrow().upvalues[upvalue_slot as usize];
-        let upvalue = upvalue_object.borrow().as_upvalue()?;
-        match *upvalue.borrow() {
+        let closure = frame.closure();
+        let upvalue_object = closure.upvalues[upvalue_slot as usize];
+        let upvalue = upvalue_object.as_upvalue()?;
+        match *upvalue {
             // Value is on the stack.
             ObjUpvalue::Open(stack_slot) => {
                 let value = self.vm.stack[stack_slot];
@@ -348,15 +420,18 @@ impl<'vm> Task<'vm> {
     /// Set the value of the variable capture by an upvalue.
     fn set_upvalue(&mut self) -> Result<(), RuntimeError> {
         let upvalue_slot = self.read_byte()?;
-        let frame = self.vm.frame();
-        let closure = frame.borrow().closure();
-        let upvalue_object = closure.borrow().upvalues[upvalue_slot as usize];
-        let upvalue = upvalue_object.borrow().as_upvalue()?;
-        match upvalue.borrow_mut().deref_mut() {
+        let value = *self.vm.stack_top(0);
+        let closure = self.vm.frame_mut().closure_mut();
+        let upvalue_object = &mut closure.upvalues[upvalue_slot as usize];
+        let upvalue = upvalue_object.as_upvalue_mut()?;
+        match upvalue {
             // Value is on the stack.
-            ObjUpvalue::Open(stack_slot) => self.vm.stack[*stack_slot] = *self.vm.stack_top(0),
+            ObjUpvalue::Open(stack_slot) => {
+                let stack_slot = *stack_slot;
+                self.vm.stack[stack_slot] = value;
+            }
             // Value is on the heap.
-            ObjUpvalue::Closed(value) => *value = *self.vm.stack_top(0),
+            ObjUpvalue::Closed(v) => *v = value,
         }
         Ok(())
     }
@@ -366,7 +441,7 @@ impl<'vm> Task<'vm> {
         let fun_object = constant.as_object()?;
         let fun = fun_object.as_fun()?;
 
-        let upvalue_count = fun.borrow().upvalue_count as usize;
+        let upvalue_count = fun.upvalue_count as usize;
         let mut upvalues = Vec::with_capacity(upvalue_count);
         for _ in 0..upvalue_count {
             let is_local = self.read_byte()? == 1;
@@ -375,14 +450,11 @@ impl<'vm> Task<'vm> {
                 upvalues.push(self.capture_upvalue(self.vm.frame().slot + index)?);
             } else {
                 let closure = self.vm.frame().closure();
-                upvalues.push(closure.borrow().upvalues[index]);
+                upvalues.push(closure.upvalues[index]);
             }
         }
 
-        let closure = self
-            .vm
-            .heap
-            .alloc_closure(ObjClosure::new(fun_object, upvalues));
+        let closure = self.vm.alloc_closure(ObjClosure::new(fun_object, upvalues));
         self.vm.stack_push(Value::Object(closure))?;
 
         Ok(())
@@ -394,15 +466,15 @@ impl<'vm> Task<'vm> {
         // to close over a variable not a value. Thus, closures can shared data through the same
         // captured variable.
         for obj in self.vm.open_upvalues.iter() {
-            let upvalue = obj.borrow().as_upvalue()?;
-            if let ObjUpvalue::Open(loc) = *upvalue.borrow() {
+            let upvalue = obj.as_upvalue()?;
+            if let ObjUpvalue::Open(loc) = *upvalue {
                 if loc == location {
                     return Ok(*obj);
                 }
             }
         }
         // Make a new open upvalue.
-        let upvalue = self.vm.heap.alloc_upvalue(ObjUpvalue::Open(location));
+        let upvalue = self.vm.alloc_upvalue(ObjUpvalue::Open(location));
         self.vm.open_upvalues.push(upvalue);
         Ok(upvalue)
     }
@@ -410,23 +482,22 @@ impl<'vm> Task<'vm> {
     // Close all upvalues whose referenced stack slot went out of scope. Here, `last` is the lowest
     // stack slot that went out of scope.
     fn close_upvalues(&mut self, last: usize) -> Result<(), RuntimeError> {
-        for obj in self.vm.open_upvalues.iter() {
-            let upvalue = obj.borrow().as_upvalue()?;
+        for obj in self.vm.open_upvalues.iter_mut() {
+            let upvalue = obj.as_upvalue_mut()?;
             // Check if we reference a slot that went out of scope.
-            let stack_slot = match *upvalue.borrow() {
-                ObjUpvalue::Open(slot) if slot >= last => Some(slot),
+            let stack_slot = match upvalue {
+                ObjUpvalue::Open(slot) if *slot >= last => Some(slot),
                 _ => None,
             };
             // Hoist the variable up into the upvalue so it can live after the stack frame is pop.
             if let Some(slot) = stack_slot {
-                upvalue.replace(ObjUpvalue::Closed(self.vm.stack[slot]));
+                *upvalue = ObjUpvalue::Closed(self.vm.stack[*slot]);
             }
         }
         // remove closed upvalues from list of open upvalues
-        self.vm.open_upvalues.retain(|v| match &v.content {
-            ObjectContent::Upvalue(upvalue) => matches!(*upvalue.borrow(), ObjUpvalue::Open(_)),
-            _ => false,
-        });
+        self.vm
+            .open_upvalues
+            .retain(|v| matches!(&v.content, ObjectContent::Upvalue(ObjUpvalue::Open(_))));
         Ok(())
     }
 
@@ -478,8 +549,8 @@ impl<'vm> Task<'vm> {
     }
 
     fn call_closure(&mut self, callee: ObjectRef, argc: u8) -> Result<(), RuntimeError> {
-        let closure_ref = callee.as_closure()?.borrow();
-        let fun_ref = closure_ref.fun().borrow();
+        let closure_ref = callee.as_closure()?;
+        let fun_ref = closure_ref.fun();
 
         let arity = fun_ref.arity;
         if argc != arity {
@@ -659,7 +730,7 @@ impl<'vm> Task<'vm> {
                     let mut s = String::with_capacity(s1.len() + s1.len());
                     s.push_str(s1.as_ref());
                     s.push_str(s2.as_ref());
-                    Value::Object(self.vm.heap.alloc_string(s))
+                    Value::Object(self.vm.alloc_string(s))
                 }
                 _ => {
                     return Err(RuntimeError::Value(ValueError::BadOperand(
@@ -724,15 +795,21 @@ struct CallFrame {
 }
 
 impl CallFrame {
-    fn closure(&self) -> &RefCell<ObjClosure> {
+    fn closure(&self) -> &ObjClosure {
         self.closure.as_closure().expect("Expect closure object.")
+    }
+
+    fn closure_mut(&mut self) -> &mut ObjClosure {
+        self.closure
+            .as_closure_mut()
+            .expect("Expect closure object.")
     }
 
     /// Read the next byte in the stream of bytecode instructions.
     fn read_byte(&mut self) -> Result<u8, RuntimeError> {
         let byte = {
-            let closure_ref = self.closure().borrow();
-            let fun_ref = closure_ref.fun().borrow();
+            let closure_ref = self.closure();
+            let fun_ref = closure_ref.fun();
             fun_ref.chunk.instructions[self.ip]
         };
         self.ip += 1;
@@ -742,8 +819,8 @@ impl CallFrame {
     /// Read the next 2 bytes in the stream of bytecode instructions.
     fn read_short(&mut self) -> Result<u16, RuntimeError> {
         let short = {
-            let closure_ref = self.closure().borrow();
-            let fun_ref = closure_ref.fun().borrow();
+            let closure_ref = self.closure();
+            let fun_ref = closure_ref.fun();
             let hi = fun_ref.chunk.instructions[self.ip] as u16;
             let lo = fun_ref.chunk.instructions[self.ip + 1] as u16;
             hi << 8 | lo
@@ -756,8 +833,8 @@ impl CallFrame {
     /// index given by the byte.
     fn read_constant(&mut self) -> Result<Value, RuntimeError> {
         let constant_id = self.read_byte()? as usize;
-        let closure_ref = self.closure().borrow();
-        let fun_ref = closure_ref.fun().borrow();
+        let closure_ref = self.closure();
+        let fun_ref = closure_ref.fun();
         Ok(fun_ref.chunk.constants[constant_id])
     }
 }

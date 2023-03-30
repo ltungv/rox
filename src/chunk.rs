@@ -1,6 +1,6 @@
 use crate::{opcode::Opcode, scan::Line, value::Value};
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "dbg-execution")]
 use crate::vm::JumpDirection;
 
 /// A chunk holds a sequence of instructions to be executes and their data.
@@ -63,7 +63,7 @@ impl<T> RunLength<T> {
 }
 
 /// Go through the instructions in the chunk and display them in human-readable format.
-#[cfg(debug_assertions)]
+#[cfg(feature = "dbg-execution")]
 pub(crate) fn disassemble_chunk(chunk: &Chunk, name: &str) {
     println!("== {name} ==");
     let mut offset = 0;
@@ -73,7 +73,7 @@ pub(crate) fn disassemble_chunk(chunk: &Chunk, name: &str) {
 }
 
 /// Display an instruction in human readable format.
-#[cfg(debug_assertions)]
+#[cfg(feature = "dbg-execution")]
 pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
     let line_current = chunk.get_line(offset);
     let line_previous = chunk.get_line(offset.saturating_sub(1));
@@ -132,7 +132,7 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
             println!("{:-16} {constant_id:4} {constant}", "OP_CLOSURE");
             let object = constant.as_object().expect("Expect object.");
             let fun = object.as_fun().expect("Expect function object.");
-            let upvalue_count = fun.borrow().upvalue_count;
+            let upvalue_count = fun.upvalue_count;
             for _ in 0..upvalue_count {
                 let is_local = chunk.instructions[offset + 1] == 1;
                 let index = chunk.instructions[offset + 2];
@@ -149,14 +149,14 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
 }
 
 /// Display a simple instruction in human-readable format.
-#[cfg(debug_assertions)]
+#[cfg(feature = "dbg-execution")]
 fn disassemble_simple(offset: usize, name: &'static str) -> usize {
     println!("{name}");
     offset + 1
 }
 
 /// Display a constant instruction in human-readable format.
-#[cfg(debug_assertions)]
+#[cfg(feature = "dbg-execution")]
 fn disassemble_constant(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
     let constant_id = chunk.instructions[offset + 1] as usize;
     let constant = &chunk.constants[constant_id];
@@ -165,7 +165,7 @@ fn disassemble_constant(chunk: &Chunk, offset: usize, name: &'static str) -> usi
 }
 
 /// Display a byte instruction in human-readable format.
-#[cfg(debug_assertions)]
+#[cfg(feature = "dbg-execution")]
 fn disassemble_byte(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
     let slot = chunk.instructions[offset + 1] as usize;
     println!("{name:-16} {slot:4}");
@@ -173,7 +173,7 @@ fn disassemble_byte(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
 }
 
 /// Display a jump instruction in human-readable format.
-#[cfg(debug_assertions)]
+#[cfg(feature = "dbg-execution")]
 fn disassemble_jump(chunk: &Chunk, offset: usize, dir: JumpDirection, name: &'static str) -> usize {
     let hi = chunk.instructions[offset + 1] as u16;
     let lo = chunk.instructions[offset + 2] as u16;
