@@ -1,15 +1,18 @@
 //! Implementation of the bytecode virtual machine.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ops::{Add, Div, Mul, Neg, Not, Sub},
+    ptr::NonNull,
     rc::Rc,
 };
 
 use crate::{
     compile::Parser,
     heap::Heap,
-    object::{NativeFun, ObjClosure, ObjFun, ObjUpvalue, ObjectContent, ObjectError, ObjectRef},
+    object::{
+        NativeFun, ObjClosure, ObjFun, ObjUpvalue, Object, ObjectContent, ObjectError, ObjectRef,
+    },
     opcode::Opcode,
     value::{Value, ValueError},
     InterpretError,
@@ -63,6 +66,8 @@ pub struct VirtualMachine {
     frames: Vec<CallFrame>,
     open_upvalues: Vec<ObjectRef>,
     globals: HashMap<Rc<str>, Value>,
+    grey_objects: Vec<ObjectRef>,
+    black_objects: HashSet<NonNull<Object>>,
     heap: Heap,
 }
 
@@ -80,6 +85,8 @@ impl VirtualMachine {
             frames: Vec::default(),
             open_upvalues: Vec::default(),
             globals: HashMap::default(),
+            grey_objects: Vec::default(),
+            black_objects: HashSet::default(),
             heap: Heap::default(),
         };
         vm.define_native("clock", 0, clock_native)
@@ -255,32 +262,35 @@ impl VirtualMachine {
     }
 
     fn mark_sweep(&mut self) {
-        let mut grey_objects = self.mark_roots();
-        while let Some(mut grey_object) = grey_objects.pop() {
-            grey_object.mark_references(&mut grey_objects)
+        self.grey_objects.clear();
+        self.black_objects.clear();
+        self.mark_roots();
+        while let Some(mut grey_object) = self.grey_objects.pop() {
+            self.black_objects.insert(grey_object.0);
+            grey_object.mark_references(&mut self.grey_objects, &self.black_objects)
         }
-        self.heap.sweep();
+        self.heap.sweep(&self.black_objects);
     }
 
-    fn mark_roots(&mut self) -> Vec<ObjectRef> {
-        let mut grey_objects = Vec::new();
+    fn mark_roots(&mut self) {
         for value in &mut self.stack {
             if let Value::Object(o) = value {
-                o.mark(&mut grey_objects);
+                o.mark(&mut self.grey_objects, &self.black_objects);
             }
         }
         for frame in &mut self.frames {
-            frame.closure.mark(&mut grey_objects);
+            frame
+                .closure
+                .mark(&mut self.grey_objects, &self.black_objects);
         }
         for upvalue in &mut self.open_upvalues {
-            upvalue.mark(&mut grey_objects);
+            upvalue.mark(&mut self.grey_objects, &self.black_objects);
         }
         for value in self.globals.values_mut() {
             if let Value::Object(ref mut o) = value {
-                o.mark(&mut grey_objects);
+                o.mark(&mut self.grey_objects, &self.black_objects);
             }
         }
-        grey_objects
     }
 
     #[cfg(feature = "dbg-execution")]

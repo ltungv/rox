@@ -1,4 +1,9 @@
-use std::{collections::HashMap, mem, ptr::NonNull, rc::Rc};
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+    ptr::NonNull,
+    rc::Rc,
+};
 
 use crate::object::{NativeFun, ObjClosure, ObjFun, ObjUpvalue, Object, ObjectContent, ObjectRef};
 
@@ -81,13 +86,12 @@ impl Heap {
         next
     }
 
-    pub(crate) fn sweep(&mut self) {
+    pub(crate) fn sweep(&mut self, black_objects: &HashSet<NonNull<Object>>) {
         let mut prev_obj: Option<ObjectRef> = None;
         let mut curr_obj = self.head;
 
-        while let Some(mut curr_ref) = curr_obj {
-            if curr_ref.is_marked() {
-                curr_ref.unmark();
+        while let Some(curr_ref) = curr_obj {
+            if black_objects.contains(&curr_ref.0) {
                 prev_obj = curr_obj;
                 curr_obj = curr_ref.next;
             } else {

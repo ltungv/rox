@@ -1,4 +1,4 @@
-use std::{fmt, ops, ptr::NonNull, rc::Rc};
+use std::{collections::HashSet, fmt, ops, ptr::NonNull, rc::Rc};
 
 use crate::{chunk::Chunk, value::Value};
 
@@ -13,34 +13,30 @@ pub enum ObjectError {
 pub(crate) struct ObjectRef(pub(crate) NonNull<Object>);
 
 impl ObjectRef {
-    pub(crate) fn mark(&mut self, grey_objects: &mut Vec<ObjectRef>) {
-        if self.is_marked() {
+    pub(crate) fn mark(
+        &mut self,
+        grey_objects: &mut Vec<ObjectRef>,
+        black_objects: &HashSet<NonNull<Object>>,
+    ) {
+        if black_objects.contains(&self.0) {
             return;
         }
 
         #[cfg(feature = "dbg-heap")]
         println!("{:p} mark {self}", self.0);
 
-        self.marked = true;
         grey_objects.push(*self);
     }
 
-    pub(crate) fn unmark(&mut self) {
-        #[cfg(feature = "dbg-heap")]
-        println!("{:p} unmark {self}", self.0);
-
-        self.marked = false;
-    }
-
-    pub(crate) fn is_marked(&self) -> bool {
-        self.marked
-    }
-
-    pub(crate) fn mark_references(&mut self, grey_objects: &mut Vec<ObjectRef>) {
+    pub(crate) fn mark_references(
+        &mut self,
+        grey_objects: &mut Vec<ObjectRef>,
+        black_objects: &HashSet<NonNull<Object>>,
+    ) {
         match &mut self.content {
-            ObjectContent::Upvalue(upvalue) => upvalue.mark_references(grey_objects),
-            ObjectContent::Fun(fun) => fun.mark_references(grey_objects),
-            ObjectContent::Closure(ref mut closure) => closure.mark_references(grey_objects),
+            ObjectContent::Upvalue(upvalue) => upvalue.mark_references(grey_objects, black_objects),
+            ObjectContent::Closure(closure) => closure.mark_references(grey_objects, black_objects),
+            ObjectContent::Fun(fun) => fun.mark_references(grey_objects, black_objects),
             ObjectContent::String(_) | ObjectContent::NativeFun(_) => {}
         }
     }
@@ -90,6 +86,7 @@ impl PartialEq for ObjectRef {
         }
     }
 }
+
 impl fmt::Display for ObjectRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         write!(f, "{}", self.content)
@@ -99,9 +96,6 @@ impl fmt::Display for ObjectRef {
 /// The structure of a heap-allocated object.
 #[derive(Debug)]
 pub(crate) struct Object {
-    /// A flag that is on when the object is a root during the tracing phase of the GC.
-    marked: bool,
-
     /// A pointer to the next object in the linked list of allocated objects.
     pub(crate) next: Option<ObjectRef>,
     /// The object's data.
@@ -110,11 +104,7 @@ pub(crate) struct Object {
 
 impl Object {
     pub(crate) fn new(next: Option<ObjectRef>, content: ObjectContent) -> Self {
-        Self {
-            marked: false,
-            next,
-            content,
-        }
+        Self { next, content }
     }
 
     /// Cast the object to a string reference.
@@ -223,10 +213,14 @@ impl ObjClosure {
         self.fun.as_fun().expect("Expect function object.")
     }
 
-    pub(crate) fn mark_references(&mut self, grey_objects: &mut Vec<ObjectRef>) {
-        self.fun.mark(grey_objects);
+    pub(crate) fn mark_references(
+        &mut self,
+        grey_objects: &mut Vec<ObjectRef>,
+        black_objects: &HashSet<NonNull<Object>>,
+    ) {
+        self.fun.mark(grey_objects, black_objects);
         for upvalue in &mut self.upvalues {
-            upvalue.mark(grey_objects);
+            upvalue.mark(grey_objects, black_objects);
         }
     }
 }
@@ -250,9 +244,13 @@ pub(crate) enum ObjUpvalue {
 }
 
 impl ObjUpvalue {
-    pub(crate) fn mark_references(&mut self, grey_objects: &mut Vec<ObjectRef>) {
+    pub(crate) fn mark_references(
+        &mut self,
+        grey_objects: &mut Vec<ObjectRef>,
+        black_objects: &HashSet<NonNull<Object>>,
+    ) {
         if let ObjUpvalue::Closed(Value::Object(obj)) = self {
-            obj.mark(grey_objects);
+            obj.mark(grey_objects, black_objects);
         }
     }
 }
@@ -285,10 +283,14 @@ impl ObjFun {
         }
     }
 
-    pub(crate) fn mark_references(&mut self, grey_objects: &mut Vec<ObjectRef>) {
+    pub(crate) fn mark_references(
+        &mut self,
+        grey_objects: &mut Vec<ObjectRef>,
+        black_objects: &HashSet<NonNull<Object>>,
+    ) {
         for constant in &self.chunk.constants {
             if let Value::Object(mut obj) = constant {
-                obj.mark(grey_objects);
+                obj.mark(grey_objects, black_objects);
             }
         }
     }
