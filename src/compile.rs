@@ -81,6 +81,8 @@ pub(crate) struct Parser<'src, 'vm> {
     token_curr: Token<'src>,
     /// The scanner for turning source bytes into tokens.
     scanner: Scanner<'src>,
+    /// The compiler's state for tracking classes.
+    classes: Vec<ClassCompiler>,
     /// The compiler's state for tracking scopes.
     compilers: Vec<Compiler<'src>>,
     /// The heap of the currently running virtual machine.
@@ -97,6 +99,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             token_prev: Token::placeholder(),
             token_curr: Token::placeholder(),
             scanner: Scanner::new(src),
+            classes: Vec::new(),
             compilers: vec![Compiler::new(fun, FunctionType::Script)],
             heap,
         }
@@ -150,6 +153,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.var_declaration();
         } else if self.advance_if(Kind::Fun) {
             self.fun_declaration();
+        } else if self.advance_if(Kind::Class) {
+            self.class_declaration();
         } else {
             self.statement();
         }
@@ -224,6 +229,58 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.function(FunctionType::Function);
         // Define the function after we have finished parsing.
         self.define_variable(fun_name_const);
+    }
+
+    /// Parse a variable declaration assuming that we've already consumed the 'class' keyword.
+    ///
+    /// ## Grammar
+    ///
+    /// ```text
+    /// classDecl  --> "class" IDENT ( "<" IDENT )? "{" function* "}" ;
+    /// ```
+    fn class_declaration(&mut self) {
+        self.consume(Kind::Ident, "Expect class name.");
+        // Track the identifier token, so we can load it after finish parsing all methods.
+        let class_name = self.token_prev;
+        let name_const = self.identifier_constant(class_name);
+        // Emit instructions for declaring a class definition with the given name.
+        self.declare_variable();
+        self.emit(Opcode::Class);
+        self.emit_byte(name_const);
+        self.define_variable(name_const);
+
+        // Keep track of the number of nesting class declarations.
+        self.classes.push(ClassCompiler::new());
+
+        // Put the class object back onto the stack.
+        self.named_variable(class_name, false);
+        // Parse class' methods.
+        self.consume(Kind::LBrace, "Expect '{' before class body.");
+        while !self.check_curr(Kind::RBrace) && !self.check_curr(Kind::Eof) {
+            self.method();
+        }
+        self.consume(Kind::RBrace, "Expect '}' after class body.");
+        // Remove the class object from the stack.
+        self.emit(Opcode::Pop);
+
+        // Remove one class nesting level.
+        self.classes.pop();
+    }
+
+    /// Parse all the methods presented in a class body. Classes don't have field declarations.
+    fn method(&mut self) {
+        self.consume(Kind::Ident, "Expect method name.");
+        let name_const = self.identifier_constant(self.token_prev);
+
+        // Select the type of function based on its name
+        if self.token_prev.lexeme == "init" {
+            self.function(FunctionType::Initializer);
+        } else {
+            self.function(FunctionType::Method);
+        }
+
+        self.emit(Opcode::Method);
+        self.emit_byte(name_const);
     }
 
     /// Parse a function block assuming that we've already consumed its name.
@@ -386,7 +443,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             let local = compiler
                 .locals
                 .last_mut()
-                .expect("A local varialbe should have been declared.");
+                .expect("A local variable should have been declared.");
             local.depth = compiler.scope_depth;
         }
     }
@@ -600,6 +657,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if self.advance_if(Kind::Semicolon) {
             self.emit_return();
         } else {
+            if self.compiler(0).fun_type == FunctionType::Initializer {
+                self.error_prev("Can't return a value from an initializer.");
+            }
             // Returned the value of an expression.
             self.expression();
             self.consume(Kind::Semicolon, "Expect ';' after return value.");
@@ -663,7 +723,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.prefix_rule(can_assign);
         while precedence <= Precedence::of(self.token_curr.kind) {
             self.advance();
-            self.infix_rule();
+            self.infix_rule(can_assign);
         }
         // The assignment target is wrong, if the current expression can be assigned to but we
         // haven't consumed the '=' after all the steps.
@@ -677,6 +737,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         match self.token_prev.kind {
             Kind::LParen => self.grouping(),
             Kind::Minus | Kind::Bang => self.unary(),
+            Kind::This => self.this(),
             Kind::Ident => self.variable(can_assign),
             Kind::String => self.string(),
             Kind::Number => self.number(),
@@ -686,9 +747,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     /// Parse an infix expression if the consumed token can be used in a infix operation.
-    fn infix_rule(&mut self) {
+    fn infix_rule(&mut self, can_assign: bool) {
         match self.token_prev.kind {
             Kind::LParen => self.call(),
+            Kind::Dot => self.dot(can_assign),
             Kind::Or => self.or(),
             Kind::And => self.and(),
             Kind::Minus
@@ -811,30 +873,60 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// call       --> primary ( "(" args? ")" | "." IDENT )* ;
     /// ```
     fn call(&mut self) {
-        let arg_count = self.argument_list();
+        let argc = self.argument_list();
         self.emit(Opcode::Call);
-        self.emit_byte(arg_count);
+        self.emit_byte(argc);
+    }
+
+    fn dot(&mut self, can_assign: bool) {
+        self.consume(Kind::Ident, "Expect property name after '.'.");
+        let name = self.identifier_constant(self.token_prev);
+
+        if can_assign && self.advance_if(Kind::Equal) {
+            self.expression();
+            self.emit(Opcode::SetProperty);
+            self.emit_byte(name);
+        } else if self.advance_if(Kind::LParen) {
+            // If we found an open parenthesis after a dotted identifier,
+            // it's must be a method call.
+            let argc = self.argument_list();
+            self.emit(Opcode::Invoke);
+            self.emit_byte(name);
+            self.emit_byte(argc);
+        } else {
+            self.emit(Opcode::GetProperty);
+            self.emit_byte(name);
+        }
     }
 
     /// Parse the parameters of funcion call where the '(' token after the function
     /// name has been consumed.
     fn argument_list(&mut self) -> u8 {
-        let mut arg_count = 0;
+        let mut argc = 0;
         if !self.check_curr(Kind::RParen) {
             loop {
                 self.expression();
-                if arg_count == MAX_PARAMS {
+                if argc == MAX_PARAMS {
                     self.error_prev("Can't have more than 255 arguments.");
                     break;
                 }
-                arg_count += 1;
+                argc += 1;
                 if !self.advance_if(Kind::Comma) {
                     break;
                 }
             }
         }
         self.consume(Kind::RParen, "Expect ')' after arguments.");
-        arg_count as u8
+        argc as u8
+    }
+
+    /// Parse the 'this' keyword as a local variable.
+    fn this(&mut self) {
+        if self.classes.is_empty() {
+            self.error_prev("Can't use 'this' outside of a class.");
+            return;
+        }
+        self.variable(false);
     }
 
     /// Parse a variable identifier within an expression.
@@ -1034,7 +1126,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Emit an implicit nil return.
     fn emit_return(&mut self) {
-        self.emit(Opcode::Nil);
+        if self.compiler(0).fun_type == FunctionType::Initializer {
+            // A class initializer should put the instance on top of the stack when finish.
+            self.emit(Opcode::GetLocal);
+            self.emit_byte(0);
+        } else {
+            // Any other function emit NIL instead.
+            self.emit(Opcode::Nil);
+        }
         self.emit(Opcode::Ret);
     }
 
@@ -1202,6 +1301,16 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 }
 
+/// A structure for tracking the compiler current nested classes.
+#[derive(Debug)]
+struct ClassCompiler {}
+
+impl ClassCompiler {
+    fn new() -> Self {
+        Self {}
+    }
+}
+
 /// A structure for tracking the compiler current scoped states.
 #[derive(Debug)]
 struct Compiler<'src> {
@@ -1217,16 +1326,22 @@ struct Compiler<'src> {
 
 impl<'src> Compiler<'src> {
     fn new(fun: ObjFun, fun_type: FunctionType) -> Self {
+        // If we're in a method/initializer then slot 0 is used for the class instance.
+        // Otherwise, it's used for holding the executing function.
+        let first_slot_name = match fun_type {
+            FunctionType::Method | FunctionType::Initializer => "this",
+            _ => "",
+        };
         Self {
             fun,
             fun_type,
             scope_depth: 0,
             locals: vec![Local {
-                name: "",
+                name: first_slot_name,
                 depth: 0,
                 is_captured: false,
             }],
-            upvalues: Vec::default(),
+            upvalues: Vec::new(),
         }
     }
 }
@@ -1235,6 +1350,8 @@ impl<'src> Compiler<'src> {
 enum FunctionType {
     Script,
     Function,
+    Method,
+    Initializer,
 }
 
 #[derive(Debug)]

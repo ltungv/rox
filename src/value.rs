@@ -4,8 +4,12 @@ use crate::object::ObjectRef;
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ValueError {
-    #[error("{0}")]
-    BadOperand(&'static str),
+    #[error("Operand must be a number.")]
+    UnaryOperandsMustBeNumber,
+    #[error("Operands must be numbers.")]
+    BinaryOperandsMustBeNumbers,
+    #[error("Operands must be two numbers or two strings.")]
+    BinaryOperandsMustBeNumbersOrStrings,
     #[error("Invalid cast.")]
     InvalidCast,
 }
@@ -52,28 +56,28 @@ impl Value {
     pub(crate) fn lt(&self, other: &Self) -> Result<bool, ValueError> {
         match self.partial_cmp(other) {
             Some(order) => Ok(matches!(order, Ordering::Less)),
-            None => Err(ValueError::BadOperand("Operands must be numbers.")),
+            None => Err(ValueError::BinaryOperandsMustBeNumbers),
         }
     }
 
     pub(crate) fn le(&self, other: &Self) -> Result<bool, ValueError> {
         match self.partial_cmp(other) {
             Some(order) => Ok(matches!(order, Ordering::Less | Ordering::Equal)),
-            None => Err(ValueError::BadOperand("Operands must be numbers.")),
+            None => Err(ValueError::BinaryOperandsMustBeNumbers),
         }
     }
 
     pub(crate) fn gt(&self, other: &Self) -> Result<bool, ValueError> {
         match self.partial_cmp(other) {
             Some(order) => Ok(matches!(order, Ordering::Greater)),
-            None => Err(ValueError::BadOperand("Operands must be numbers.")),
+            None => Err(ValueError::BinaryOperandsMustBeNumbers),
         }
     }
 
     pub(crate) fn ge(&self, other: &Self) -> Result<bool, ValueError> {
         match self.partial_cmp(other) {
             Some(order) => Ok(matches!(order, Ordering::Greater | Ordering::Equal)),
-            None => Err(ValueError::BadOperand("Operands must be numbers.")),
+            None => Err(ValueError::BinaryOperandsMustBeNumbers),
         }
     }
 }
@@ -105,9 +109,7 @@ impl ops::Add for &Value {
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 + n2)),
-            _ => Err(ValueError::BadOperand(
-                "Operands must be two numbers or two strings.",
-            )),
+            _ => Err(ValueError::BinaryOperandsMustBeNumbersOrStrings),
         }
     }
 }
@@ -118,7 +120,7 @@ impl ops::Sub for &Value {
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 - n2)),
-            _ => Err(ValueError::BadOperand("Operands must be numbers.")),
+            _ => Err(ValueError::BinaryOperandsMustBeNumbers),
         }
     }
 }
@@ -129,7 +131,7 @@ impl ops::Mul for &Value {
     fn mul(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 * n2)),
-            _ => Err(ValueError::BadOperand("Operands must be numbers.")),
+            _ => Err(ValueError::BinaryOperandsMustBeNumbers),
         }
     }
 }
@@ -140,7 +142,7 @@ impl ops::Div for &Value {
     fn div(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 / n2)),
-            _ => Err(ValueError::BadOperand("Operands must be numbers.")),
+            _ => Err(ValueError::BinaryOperandsMustBeNumbers),
         }
     }
 }
@@ -151,7 +153,7 @@ impl ops::Neg for &Value {
     fn neg(self) -> Self::Output {
         match self {
             Value::Number(n) => Ok(Value::Number(-n)),
-            _ => Err(ValueError::BadOperand("Operand must be a number.")),
+            _ => Err(ValueError::UnaryOperandsMustBeNumber),
         }
     }
 }

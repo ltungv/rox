@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt,
     marker::PhantomData,
     ops,
@@ -51,16 +51,25 @@ impl ObjectRef {
     }
 
     pub(crate) fn mark_references(
-        &mut self,
+        &self,
         grey_objects: &mut Vec<ObjectRef>,
         black_objects: &HashSet<*mut Object>,
     ) {
         match &self.content {
             ObjectContent::Upvalue(upvalue) => upvalue
-                .borrow_mut()
+                .borrow()
                 .mark_references(grey_objects, black_objects),
             ObjectContent::Closure(closure) => closure.mark_references(grey_objects, black_objects),
             ObjectContent::Fun(fun) => fun.mark_references(grey_objects, black_objects),
+            ObjectContent::Class(class) => {
+                class.borrow().mark_references(grey_objects, black_objects)
+            }
+            ObjectContent::Instance(instance) => instance
+                .borrow()
+                .mark_references(grey_objects, black_objects),
+            ObjectContent::BoundMethod(method) => {
+                method.mark_references(grey_objects, black_objects)
+            }
             ObjectContent::String(_) | ObjectContent::NativeFun(_) => {}
         }
     }
@@ -84,6 +93,11 @@ impl PartialEq for ObjectRef {
             (ObjectContent::Closure(_), ObjectContent::Closure(_)) => self.ptr.eq(&other.ptr),
             (ObjectContent::Fun(_), ObjectContent::Fun(_)) => self.ptr.eq(&other.ptr),
             (ObjectContent::NativeFun(_), ObjectContent::NativeFun(_)) => self.ptr.eq(&other.ptr),
+            (ObjectContent::Class(_), ObjectContent::Class(_)) => self.ptr.eq(&other.ptr),
+            (ObjectContent::Instance(_), ObjectContent::Instance(_)) => self.ptr.eq(&other.ptr),
+            (ObjectContent::BoundMethod(_), ObjectContent::BoundMethod(_)) => {
+                self.ptr.eq(&other.ptr)
+            }
             _ => false,
         }
     }
@@ -151,6 +165,46 @@ impl Object {
             _ => Err(ObjectError::InvalidCast),
         }
     }
+
+    /// Cast the object to a class definition reference.
+    pub(crate) fn as_class(&self) -> Result<Ref<'_, ObjClass>, ObjectError> {
+        match &self.content {
+            ObjectContent::Class(c) => Ok(c.borrow()),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
+
+    /// Cast the object to a class definition reference.
+    pub(crate) fn as_class_mut(&self) -> Result<RefMut<'_, ObjClass>, ObjectError> {
+        match &self.content {
+            ObjectContent::Class(c) => Ok(c.borrow_mut()),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
+
+    /// Cast the object to a class instance reference.
+    pub(crate) fn as_instance(&self) -> Result<Ref<'_, ObjInstance>, ObjectError> {
+        match &self.content {
+            ObjectContent::Instance(i) => Ok(i.borrow()),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
+
+    /// Cast the object to a mutable class instance reference.
+    pub(crate) fn as_instance_mut(&self) -> Result<RefMut<'_, ObjInstance>, ObjectError> {
+        match &self.content {
+            ObjectContent::Instance(i) => Ok(i.borrow_mut()),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
+
+    /// Cast the object to a class instance reference.
+    pub(crate) fn as_bound_method(&self) -> Result<&ObjBoundMethod, ObjectError> {
+        match &self.content {
+            ObjectContent::BoundMethod(m) => Ok(m),
+            _ => Err(ObjectError::InvalidCast),
+        }
+    }
 }
 
 impl fmt::Display for Object {
@@ -172,12 +226,12 @@ pub(crate) enum ObjectContent {
     Fun(ObjFun),
     /// A native function object
     NativeFun(NativeFun),
-    // /// A class object
-    // Class(Gc<RefCell<ObjClass>>),
-    // /// A class instance
-    // Instance(Gc<RefCell<ObjInstance>>),
-    // /// A class instance
-    // BoundMethod(Gc<ObjBoundMethod>),
+    /// A class object
+    Class(RefCell<ObjClass>),
+    /// A class instance
+    Instance(RefCell<ObjInstance>),
+    /// A class instance
+    BoundMethod(ObjBoundMethod),
 }
 
 impl fmt::Display for ObjectContent {
@@ -188,6 +242,9 @@ impl fmt::Display for ObjectContent {
             Self::Closure(c) => write!(f, "{c}"),
             Self::Fun(fun) => write!(f, "{fun}"),
             Self::NativeFun(fun) => write!(f, "{fun}"),
+            Self::Class(c) => write!(f, "{}", c.borrow()),
+            Self::Instance(i) => write!(f, "{}", i.borrow()),
+            Self::BoundMethod(m) => write!(f, "{m}"),
         }
     }
 }
@@ -200,14 +257,8 @@ pub(crate) struct ObjClosure {
 }
 
 impl ObjClosure {
-    /// Create a new closure object backed by the given function and upvalues.
     pub(crate) fn new(fun: ObjectRef, upvalues: Vec<ObjectRef>) -> Self {
         Self { fun, upvalues }
-    }
-
-    /// Get a reference to the function object.
-    pub(crate) fn fun(&self) -> &ObjFun {
-        self.fun.as_fun().expect("Expect function object.")
     }
 
     pub(crate) fn mark_references(
@@ -224,8 +275,7 @@ impl ObjClosure {
 
 impl fmt::Display for ObjClosure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        let fun = self.fun.as_fun().expect("Expect function object.");
-        write!(f, "{fun}")
+        write!(f, "{}", self.fun)
     }
 }
 
@@ -242,7 +292,7 @@ pub(crate) enum ObjUpvalue {
 
 impl ObjUpvalue {
     pub(crate) fn mark_references(
-        &mut self,
+        &self,
         grey_objects: &mut Vec<ObjectRef>,
         black_objects: &HashSet<*mut Object>,
     ) {
@@ -319,5 +369,99 @@ impl fmt::Display for NativeFun {
 impl fmt::Debug for NativeFun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         write!(f, "<native fn>")
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ObjClass {
+    pub(crate) methods: HashMap<Rc<str>, ObjectRef>,
+    pub(crate) name: Rc<str>,
+}
+
+impl ObjClass {
+    pub(crate) fn new(name: Rc<str>) -> Self {
+        Self {
+            name,
+            methods: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn mark_references(
+        &self,
+        grey_objects: &mut Vec<ObjectRef>,
+        black_objects: &HashSet<*mut Object>,
+    ) {
+        for method in self.methods.values() {
+            method.mark(grey_objects, black_objects);
+        }
+    }
+}
+
+impl fmt::Display for ObjClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ObjInstance {
+    pub(crate) class: ObjectRef,
+    pub(crate) fields: HashMap<Rc<str>, Value>,
+}
+
+impl ObjInstance {
+    pub(crate) fn new(class: ObjectRef) -> Self {
+        Self {
+            class,
+            fields: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn mark_references(
+        &self,
+        grey_objects: &mut Vec<ObjectRef>,
+        black_objects: &HashSet<*mut Object>,
+    ) {
+        self.class.mark(grey_objects, black_objects);
+        for value in self.fields.values() {
+            if let Value::Object(obj) = value {
+                obj.mark(grey_objects, black_objects);
+            }
+        }
+    }
+}
+
+impl fmt::Display for ObjInstance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} instance", self.class)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ObjBoundMethod {
+    pub(crate) receiver: Value,
+    pub(crate) method: ObjectRef,
+}
+
+impl ObjBoundMethod {
+    pub(crate) fn new(receiver: Value, method: ObjectRef) -> Self {
+        Self { receiver, method }
+    }
+
+    pub(crate) fn mark_references(
+        &self,
+        grey_objects: &mut Vec<ObjectRef>,
+        black_objects: &HashSet<*mut Object>,
+    ) {
+        if let Value::Object(o) = self.receiver {
+            o.mark(grey_objects, black_objects);
+        }
+        self.method.mark(grey_objects, black_objects)
+    }
+}
+
+impl fmt::Display for ObjBoundMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.method)
     }
 }

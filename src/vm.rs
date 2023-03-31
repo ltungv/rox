@@ -10,7 +10,8 @@ use crate::{
     compile::Parser,
     heap::Heap,
     object::{
-        NativeFun, ObjClosure, ObjFun, ObjUpvalue, Object, ObjectContent, ObjectError, ObjectRef,
+        NativeFun, ObjBoundMethod, ObjClass, ObjClosure, ObjFun, ObjInstance, ObjUpvalue, Object,
+        ObjectContent, ObjectError, ObjectRef,
     },
     opcode::Opcode,
     value::{Value, ValueError},
@@ -41,7 +42,15 @@ pub enum RuntimeError {
     #[error(transparent)]
     Object(#[from] ObjectError),
 
-    /// Overflown the virtual machine's stack.
+    /// Can't access a property.
+    #[error("Only instances have properties.")]
+    ObjectHasNoProperty,
+
+    /// Can't access a field.
+    #[error("Only instances have fields.")]
+    ObjectHasNoField,
+
+    /// Overflow the virtual machine's stack.
     #[error("Stack overflow.")]
     StackOverflow,
 
@@ -49,9 +58,21 @@ pub enum RuntimeError {
     #[error("Undefined variable '{0}'.")]
     UndefinedVariable(String),
 
+    /// Can't find a property in the instance.
+    #[error("Undefined property '{0}'.")]
+    UndefinedProperty(String),
+
+    /// Can't call objects that are not supported.
+    #[error("Can only call functions and classes.")]
+    InvalidCallee,
+
+    /// Can't call objects that are not supported.
+    #[error("Only instances have methods.")]
+    InvalidMethodInvocation,
+
     /// Called a function/method with incorrect number of arguments.
     #[error("Expected {arity} arguments but got {argc}.")]
-    BadArgumentsCount {
+    InvalidArgumentsCount {
         /// The arity of the function.
         arity: u8,
         /// The number of arguments given.
@@ -80,12 +101,12 @@ impl VirtualMachine {
     /// Create a new virtual machine that prints to the given output.
     pub fn new() -> Self {
         let mut vm = Self {
-            stack: Vec::default(),
-            frames: Vec::default(),
-            open_upvalues: Vec::default(),
-            globals: HashMap::default(),
-            grey_objects: Vec::default(),
-            black_objects: HashSet::default(),
+            stack: Vec::new(),
+            frames: Vec::new(),
+            open_upvalues: Vec::new(),
+            globals: HashMap::new(),
+            grey_objects: Vec::new(),
+            black_objects: HashSet::new(),
             heap: Heap::default(),
         };
         vm.define_native("clock", 0, clock_native)
@@ -157,13 +178,13 @@ impl VirtualMachine {
         self.frames.pop().expect("Stack empty.")
     }
 
-    fn stack_push(&mut self, value: Value) -> Result<usize, RuntimeError> {
+    fn stack_push(&mut self, value: Value) -> Result<(), RuntimeError> {
         let stack_size = self.stack.len();
         if stack_size == VM_STACK_SIZE {
             return Err(RuntimeError::StackOverflow);
         }
         self.stack.push(value);
-        Ok(stack_size)
+        Ok(())
     }
 
     fn stack_pop(&mut self) -> Value {
@@ -187,7 +208,7 @@ impl VirtualMachine {
     fn trace_calls(&self) -> Result<(), RuntimeError> {
         for frame in self.frames.iter().rev() {
             let closure_ref = frame.closure();
-            let fun_ref = closure_ref.fun();
+            let fun_ref = closure_ref.fun.as_fun()?;
             let line = fun_ref.chunk.get_line(frame.ip - 1);
             match &fun_ref.name {
                 None => eprintln!("{line} in script."),
@@ -237,6 +258,21 @@ impl VirtualMachine {
         self.heap.alloc_native_fun(native_fun)
     }
 
+    fn alloc_class(&mut self, class: ObjClass) -> ObjectRef {
+        self.gc();
+        self.heap.alloc_class(class)
+    }
+
+    fn alloc_instance(&mut self, instance: ObjInstance) -> ObjectRef {
+        self.gc();
+        self.heap.alloc_instance(instance)
+    }
+
+    fn alloc_bound_method(&mut self, method: ObjBoundMethod) -> ObjectRef {
+        self.gc();
+        self.heap.alloc_bound_method(method)
+    }
+
     fn gc(&mut self) {
         if self.heap.size() <= self.heap.next_gc() {
             return;
@@ -265,7 +301,7 @@ impl VirtualMachine {
         self.grey_objects.clear();
         self.black_objects.clear();
         self.mark_roots();
-        while let Some(mut grey_object) = self.grey_objects.pop() {
+        while let Some(grey_object) = self.grey_objects.pop() {
             self.black_objects.insert(grey_object.as_ptr());
             grey_object.mark_references(&mut self.grey_objects, &self.black_objects)
         }
@@ -349,21 +385,15 @@ impl<'vm> Task<'vm> {
                 self.vm.trace_stack();
                 let frame = self.vm.frame();
                 let closure_ref = frame.closure();
-                let fun_ref = closure_ref.fun();
+                let fun_ref = closure_ref.fun.as_fun()?;
                 disassemble_instruction(&fun_ref.chunk, frame.ip);
             }
 
             match Opcode::try_from(self.read_byte()?)? {
                 Opcode::Const => self.constant()?,
-                Opcode::Nil => {
-                    self.vm.stack_push(Value::Nil)?;
-                }
-                Opcode::True => {
-                    self.vm.stack_push(Value::Bool(true))?;
-                }
-                Opcode::False => {
-                    self.vm.stack_push(Value::Bool(false))?;
-                }
+                Opcode::Nil => self.vm.stack_push(Value::Nil)?,
+                Opcode::True => self.vm.stack_push(Value::Bool(true))?,
+                Opcode::False => self.vm.stack_push(Value::Bool(false))?,
                 Opcode::Pop => {
                     self.vm.stack_pop();
                 }
@@ -374,6 +404,8 @@ impl<'vm> Task<'vm> {
                 Opcode::DefineGlobal => self.defined_global()?,
                 Opcode::GetUpvalue => self.get_upvalue()?,
                 Opcode::SetUpvalue => self.set_upvalue()?,
+                Opcode::GetProperty => self.get_property()?,
+                Opcode::SetProperty => self.set_property()?,
                 Opcode::NE => self.ne()?,
                 Opcode::EQ => self.eq()?,
                 Opcode::GT => self.gt()?,
@@ -392,19 +424,138 @@ impl<'vm> Task<'vm> {
                 Opcode::JumpIfFalse => self.jump_if_false()?,
                 Opcode::Loop => self.jump(JumpDirection::Backward)?,
                 Opcode::Call => self.call()?,
+                Opcode::Invoke => self.invoke()?,
                 Opcode::Closure => self.closure()?,
-                Opcode::CloseUpvalue => {
-                    self.close_upvalues(self.vm.stack.len() - 1)?;
-                    self.vm.stack_pop();
-                }
+                Opcode::CloseUpvalue => self.close_upvalue()?,
                 Opcode::Ret => {
                     if self.ret()? {
                         break;
                     }
                 }
+                Opcode::Class => self.class()?,
+                Opcode::Method => self.method()?,
                 _ => unreachable!(),
             }
         }
+        Ok(())
+    }
+
+    fn invoke(&mut self) -> Result<(), RuntimeError> {
+        let method_ref = self.read_constant()?.as_object()?;
+        let method = method_ref.as_string()?;
+        let argc = self.read_byte()?;
+
+        let receiver = self.vm.stack_top(argc as usize);
+        let instance_ref = receiver
+            .as_object()
+            .map_err(|_| RuntimeError::InvalidMethodInvocation)?;
+        let instance = instance_ref
+            .as_instance()
+            .map_err(|_| RuntimeError::InvalidMethodInvocation)?;
+
+        if let Some(field) = instance.fields.get(&method) {
+            *self.vm.stack_top_mut(argc as usize) = *field;
+            self.call_value(*field, argc)?;
+        } else {
+            self.invoke_from_class(instance.class, &method, argc)?;
+        }
+
+        Ok(())
+    }
+
+    fn invoke_from_class(
+        &mut self,
+        class: ObjectRef,
+        name: &str,
+        argc: u8,
+    ) -> Result<(), RuntimeError> {
+        let class = class.as_class()?;
+        let method = class
+            .methods
+            .get(name)
+            .ok_or_else(|| RuntimeError::UndefinedProperty(name.to_string()))?;
+        self.call_closure(*method, argc)?;
+        Ok(())
+    }
+
+    // Bind a method to a class definition. At this moment, a closure object should be the top most
+    // item in the stack, and a class definition object should be the second top most item.
+    fn method(&mut self) -> Result<(), RuntimeError> {
+        // Get name from constant
+        let name_ref = self.read_constant()?.as_object()?;
+        let name = name_ref.as_string()?;
+        let closure = self.vm.stack_pop().as_object()?;
+        let class_ref = self.vm.stack_top(0).as_object()?;
+        let mut class = class_ref.as_class_mut()?;
+        class.methods.insert(name, closure);
+        Ok(())
+    }
+
+    fn bind_method(&mut self, class: ObjectRef, name: &str) -> Result<bool, RuntimeError> {
+        let class = class.as_class()?;
+        match class.methods.get(name) {
+            Some(method) => {
+                let bound = self
+                    .vm
+                    .alloc_bound_method(ObjBoundMethod::new(*self.vm.stack_top(0), *method));
+                self.vm.stack_pop();
+                self.vm.stack_push(Value::Object(bound))?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn get_property(&mut self) -> Result<(), RuntimeError> {
+        let instance_obj = self
+            .vm
+            .stack_top(0)
+            .as_object()
+            .map_err(|_| RuntimeError::ObjectHasNoProperty)?;
+        let instance = instance_obj
+            .as_instance()
+            .map_err(|_| RuntimeError::ObjectHasNoProperty)?;
+
+        let name_obj = self.read_constant()?.as_object()?;
+        let name = name_obj.as_string()?;
+
+        if let Some(value) = instance.fields.get(&name) {
+            self.vm.stack_pop();
+            self.vm.stack_push(*value)?;
+            Ok(())
+        } else if self.bind_method(instance.class, &name)? {
+            Ok(())
+        } else {
+            Err(RuntimeError::UndefinedProperty(name.to_string()))
+        }
+    }
+
+    fn set_property(&mut self) -> Result<(), RuntimeError> {
+        let value = self.vm.stack_pop();
+        let instance_obj = self
+            .vm
+            .stack_top(0)
+            .as_object()
+            .map_err(|_| RuntimeError::ObjectHasNoField)?;
+        let mut instance = instance_obj
+            .as_instance_mut()
+            .map_err(|_| RuntimeError::ObjectHasNoField)?;
+
+        let name_obj = self.read_constant()?.as_object()?;
+        let name = name_obj.as_string()?;
+
+        instance.fields.insert(name, value);
+        self.vm.stack_pop();
+        self.vm.stack_push(value)?;
+        Ok(())
+    }
+
+    fn class(&mut self) -> Result<(), RuntimeError> {
+        let constant = self.read_constant()?;
+        let object = constant.as_object()?;
+        let name = object.as_string()?;
+        let class = self.vm.alloc_class(ObjClass::new(name));
+        self.vm.stack_push(Value::Object(class))?;
         Ok(())
     }
 
@@ -474,6 +625,12 @@ impl<'vm> Task<'vm> {
         let closure = self.vm.alloc_closure(ObjClosure::new(fun_object, upvalues));
         self.vm.stack_push(Value::Object(closure))?;
 
+        Ok(())
+    }
+
+    fn close_upvalue(&mut self) -> Result<(), RuntimeError> {
+        self.close_upvalues(self.vm.stack.len() - 1)?;
+        self.vm.stack_pop();
         Ok(())
     }
 
@@ -553,9 +710,7 @@ impl<'vm> Task<'vm> {
     fn call_value(&mut self, callee: Value, argc: u8) -> Result<(), RuntimeError> {
         match callee {
             Value::Object(o) => self.call_object(o, argc),
-            _ => Err(RuntimeError::Value(ValueError::BadOperand(
-                "Can only call functions and classes.",
-            ))),
+            _ => Err(RuntimeError::InvalidCallee),
         }
     }
 
@@ -563,19 +718,19 @@ impl<'vm> Task<'vm> {
         match &callee.content {
             ObjectContent::Closure(_) => self.call_closure(callee, argc),
             ObjectContent::NativeFun(f) => self.call_native(f, argc),
-            _ => Err(RuntimeError::Value(ValueError::BadOperand(
-                "Can only call functions and classes.",
-            ))),
+            ObjectContent::Class(_) => self.call_class(callee, argc),
+            ObjectContent::BoundMethod(_) => self.call_bound_method(callee, argc),
+            _ => Err(RuntimeError::InvalidCallee),
         }
     }
 
     fn call_closure(&mut self, callee: ObjectRef, argc: u8) -> Result<(), RuntimeError> {
         let closure_ref = callee.as_closure()?;
-        let fun_ref = closure_ref.fun();
+        let fun_ref = closure_ref.fun.as_fun()?;
 
         let arity = fun_ref.arity;
         if argc != arity {
-            return Err(RuntimeError::BadArgumentsCount { arity, argc });
+            return Err(RuntimeError::InvalidArgumentsCount { arity, argc });
         }
         let frame = CallFrame {
             closure: callee,
@@ -588,7 +743,7 @@ impl<'vm> Task<'vm> {
 
     fn call_native(&mut self, fun: &NativeFun, argc: u8) -> Result<(), RuntimeError> {
         if argc != fun.arity {
-            return Err(RuntimeError::BadArgumentsCount {
+            return Err(RuntimeError::InvalidArgumentsCount {
                 arity: fun.arity,
                 argc,
             });
@@ -599,6 +754,27 @@ impl<'vm> Task<'vm> {
         let res = call(&self.vm.stack[sp - argc..]);
         self.vm.stack_remove_top(argc + 1);
         self.vm.stack_push(res)?;
+        Ok(())
+    }
+
+    fn call_class(&mut self, callee: ObjectRef, argc: u8) -> Result<(), RuntimeError> {
+        // Allocate a new instance and put it on top of the stack.
+        let instance = self.vm.alloc_instance(ObjInstance::new(callee));
+        *self.vm.stack_top_mut(argc.into()) = Value::Object(instance);
+        // Call the 'init' method if there's one>
+        let class = callee.as_class()?;
+        if let Some(init) = class.methods.get("init") {
+            self.call_closure(*init, argc)?;
+        } else if argc != 0 {
+            return Err(RuntimeError::InvalidArgumentsCount { arity: 0, argc });
+        }
+        Ok(())
+    }
+
+    fn call_bound_method(&mut self, callee: ObjectRef, argc: u8) -> Result<(), RuntimeError> {
+        let bound = callee.as_bound_method()?;
+        *self.vm.stack_top_mut(argc as usize) = bound.receiver;
+        self.call_closure(bound.method, argc)?;
         Ok(())
     }
 
@@ -754,9 +930,9 @@ impl<'vm> Task<'vm> {
                     Value::Object(self.vm.alloc_string(s))
                 }
                 _ => {
-                    return Err(RuntimeError::Value(ValueError::BadOperand(
-                        "Operands must be two numbers or two strings.",
-                    )))
+                    return Err(RuntimeError::Value(
+                        ValueError::BinaryOperandsMustBeNumbersOrStrings,
+                    ))
                 }
             },
             // Non-objects can used the `ops::Add` implementation for `Value`
@@ -809,6 +985,7 @@ impl<'vm> Task<'vm> {
     }
 }
 
+#[derive(Debug)]
 struct CallFrame {
     closure: ObjectRef,
     ip: usize,
@@ -824,7 +1001,7 @@ impl CallFrame {
     fn read_byte(&mut self) -> Result<u8, RuntimeError> {
         let byte = {
             let closure_ref = self.closure();
-            let fun_ref = closure_ref.fun();
+            let fun_ref = closure_ref.fun.as_fun()?;
             fun_ref.chunk.instructions[self.ip]
         };
         self.ip += 1;
@@ -835,7 +1012,7 @@ impl CallFrame {
     fn read_short(&mut self) -> Result<u16, RuntimeError> {
         let short = {
             let closure_ref = self.closure();
-            let fun_ref = closure_ref.fun();
+            let fun_ref = closure_ref.fun.as_fun()?;
             let hi = fun_ref.chunk.instructions[self.ip] as u16;
             let lo = fun_ref.chunk.instructions[self.ip + 1] as u16;
             hi << 8 | lo
@@ -849,7 +1026,7 @@ impl CallFrame {
     fn read_constant(&mut self) -> Result<Value, RuntimeError> {
         let constant_id = self.read_byte()? as usize;
         let closure_ref = self.closure();
-        let fun_ref = closure_ref.fun();
+        let fun_ref = closure_ref.fun.as_fun()?;
         Ok(fun_ref.chunk.constants[constant_id])
     }
 }

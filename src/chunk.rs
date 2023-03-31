@@ -102,7 +102,8 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::DefineGlobal => disassemble_constant(chunk, offset, "OP_DEFINE_GLOBAL"),
         Opcode::GetUpvalue => disassemble_byte(chunk, offset, "OP_GET_UPVALUE"),
         Opcode::SetUpvalue => disassemble_byte(chunk, offset, "OP_SET_UPVALUE"),
-        Opcode::Print => disassemble_simple(offset, "OP_PRINT"),
+        Opcode::GetProperty => disassemble_constant(chunk, offset, "OP_SET_PROPERTY"),
+        Opcode::SetProperty => disassemble_constant(chunk, offset, "OP_SET_PROPERTY"),
         Opcode::NE => disassemble_simple(offset, "OP_NE"),
         Opcode::EQ => disassemble_simple(offset, "OP_EQ"),
         Opcode::GT => disassemble_simple(offset, "OP_GT"),
@@ -115,6 +116,7 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::Div => disassemble_simple(offset, "OP_DIV"),
         Opcode::Not => disassemble_simple(offset, "OP_NOT"),
         Opcode::Neg => disassemble_simple(offset, "OP_NEG"),
+        Opcode::Print => disassemble_simple(offset, "OP_PRINT"),
         Opcode::Jump => disassemble_jump(chunk, offset, JumpDirection::Forward, "OP_JUMP"),
         Opcode::JumpIfTrue => {
             disassemble_jump(chunk, offset, JumpDirection::Forward, "OP_JUMP_IF_TRUE")
@@ -124,6 +126,7 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         }
         Opcode::Loop => disassemble_jump(chunk, offset, JumpDirection::Backward, "OP_LOOP"),
         Opcode::Call => disassemble_byte(chunk, offset, "OP_CALL"),
+        Opcode::Invoke => disassemble_invoke(chunk, offset, "OP_INVOKE"),
         Opcode::Closure => {
             let mut offset = offset + 1;
             let constant_id = chunk.instructions[offset] as usize;
@@ -144,6 +147,8 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         }
         Opcode::CloseUpvalue => disassemble_simple(offset, "OP_CLOSE_UPVALUE"),
         Opcode::Ret => disassemble_simple(offset, "OP_RET"),
+        Opcode::Class => disassemble_constant(chunk, offset, "OP_CLASS"),
+        Opcode::Method => disassemble_constant(chunk, offset, "OP_METHOD"),
         _ => unreachable!(),
     }
 }
@@ -183,5 +188,15 @@ fn disassemble_jump(chunk: &Chunk, offset: usize, dir: JumpDirection, name: &'st
         JumpDirection::Backward => offset + 3 - jump as usize,
     };
     println!("{name:-16} {offset:4} -> {target}");
+    offset + 3
+}
+
+/// Display a invoke instruction in human-readable format.
+#[cfg(feature = "dbg-execution")]
+fn disassemble_invoke(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
+    let slot = chunk.instructions[offset + 1];
+    let argc = chunk.instructions[offset + 2];
+    let fname = chunk.constants[slot as usize];
+    println!("{name:-16} {slot:4} ({argc} args) {fname}",);
     offset + 3
 }

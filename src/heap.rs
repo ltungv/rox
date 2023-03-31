@@ -5,7 +5,10 @@ use std::{
     rc::Rc,
 };
 
-use crate::object::{NativeFun, ObjClosure, ObjFun, ObjUpvalue, Object, ObjectContent, ObjectRef};
+use crate::object::{
+    NativeFun, ObjBoundMethod, ObjClass, ObjClosure, ObjFun, ObjInstance, ObjUpvalue, Object,
+    ObjectContent, ObjectRef,
+};
 
 /// A managed heap that cleanups memory using a tracing garbage collector.
 #[derive(Debug)]
@@ -24,8 +27,8 @@ impl Default for Heap {
             alloc_bytes: 0,
             next_gc: 1024 * 1024,
             gc_growth_factor: 2,
-            intern_str: Vec::default(),
-            intern_ids: HashMap::default(),
+            intern_str: Vec::new(),
+            intern_ids: HashMap::new(),
             head: None,
         }
     }
@@ -56,6 +59,21 @@ impl Heap {
     /// Allocates a new native function object.
     pub(crate) fn alloc_native_fun(&mut self, native_fun: NativeFun) -> ObjectRef {
         self.alloc(ObjectContent::NativeFun(native_fun))
+    }
+
+    /// Allocates a new class object.
+    pub(crate) fn alloc_class(&mut self, class: ObjClass) -> ObjectRef {
+        self.alloc(ObjectContent::Class(RefCell::new(class)))
+    }
+
+    /// Allocates a new instance object.
+    pub(crate) fn alloc_instance(&mut self, instance: ObjInstance) -> ObjectRef {
+        self.alloc(ObjectContent::Instance(RefCell::new(instance)))
+    }
+
+    /// Allocates a new bound method object.
+    pub(crate) fn alloc_bound_method(&mut self, method: ObjBoundMethod) -> ObjectRef {
+        self.alloc(ObjectContent::BoundMethod(method))
     }
 
     /// Interned a string and return the object's content holding the reference.
