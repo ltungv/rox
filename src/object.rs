@@ -1,4 +1,12 @@
-use std::{collections::HashSet, fmt, ops, ptr::NonNull, rc::Rc};
+use std::{
+    cell::{Cell, Ref, RefCell, RefMut},
+    collections::HashSet,
+    fmt,
+    marker::PhantomData,
+    ops,
+    ptr::NonNull,
+    rc::Rc,
+};
 
 use crate::{chunk::Chunk, value::Value};
 
@@ -10,20 +18,34 @@ pub enum ObjectError {
 
 /// A reference to the heap-allocated object.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ObjectRef(pub(crate) NonNull<Object>);
+pub(crate) struct ObjectRef {
+    ptr: NonNull<Object>,
+    obj: PhantomData<Object>,
+}
 
 impl ObjectRef {
+    pub(crate) fn new(boxed: Box<Object>) -> Self {
+        Self {
+            ptr: NonNull::from(Box::leak(boxed)),
+            obj: PhantomData,
+        }
+    }
+
+    pub(crate) fn as_ptr(&self) -> *mut Object {
+        self.ptr.as_ptr()
+    }
+
     pub(crate) fn mark(
-        &mut self,
+        &self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<NonNull<Object>>,
+        black_objects: &HashSet<*mut Object>,
     ) {
-        if black_objects.contains(&self.0) {
+        if black_objects.contains(&self.ptr.as_ptr()) {
             return;
         }
 
         #[cfg(feature = "dbg-heap")]
-        println!("{:p} mark {self}", self.0);
+        println!("{:p} mark {self}", self.ptr);
 
         grey_objects.push(*self);
     }
@@ -31,27 +53,16 @@ impl ObjectRef {
     pub(crate) fn mark_references(
         &mut self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<NonNull<Object>>,
+        black_objects: &HashSet<*mut Object>,
     ) {
-        match &mut self.content {
-            ObjectContent::Upvalue(upvalue) => upvalue.mark_references(grey_objects, black_objects),
+        match &self.content {
+            ObjectContent::Upvalue(upvalue) => upvalue
+                .borrow_mut()
+                .mark_references(grey_objects, black_objects),
             ObjectContent::Closure(closure) => closure.mark_references(grey_objects, black_objects),
             ObjectContent::Fun(fun) => fun.mark_references(grey_objects, black_objects),
             ObjectContent::String(_) | ObjectContent::NativeFun(_) => {}
         }
-    }
-}
-
-impl From<NonNull<Object>> for ObjectRef {
-    fn from(value: NonNull<Object>) -> Self {
-        Self(value)
-    }
-}
-
-impl From<Box<Object>> for ObjectRef {
-    fn from(value: Box<Object>) -> Self {
-        let object_ptr = NonNull::from(Box::leak(value));
-        Self::from(object_ptr)
     }
 }
 
@@ -62,16 +73,7 @@ impl ops::Deref for ObjectRef {
     fn deref(&self) -> &Self::Target {
         // SAFETY: If we still own a handle then the underlying must not be deallocated. Thus, it's
         // safe to get a reference from the raw pointer.
-        unsafe { self.0.as_ref() }
-    }
-}
-
-impl ops::DerefMut for ObjectRef {
-    #[allow(unsafe_code)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: If we still own a handle then the underlying must not be deallocated. Thus, it's
-        // safe to get a reference from the raw pointer.
-        unsafe { self.0.as_mut() }
+        unsafe { self.ptr.as_ref() }
     }
 }
 
@@ -79,9 +81,9 @@ impl PartialEq for ObjectRef {
     fn eq(&self, other: &Self) -> bool {
         match (&self.content, &other.content) {
             (ObjectContent::String(s1), ObjectContent::String(s2)) => Rc::ptr_eq(s1, s2),
-            (ObjectContent::Closure(_), ObjectContent::Closure(_)) => self.0.eq(&other.0),
-            (ObjectContent::Fun(_), ObjectContent::Fun(_)) => self.0.eq(&other.0),
-            (ObjectContent::NativeFun(_), ObjectContent::NativeFun(_)) => self.0.eq(&other.0),
+            (ObjectContent::Closure(_), ObjectContent::Closure(_)) => self.ptr.eq(&other.ptr),
+            (ObjectContent::Fun(_), ObjectContent::Fun(_)) => self.ptr.eq(&other.ptr),
+            (ObjectContent::NativeFun(_), ObjectContent::NativeFun(_)) => self.ptr.eq(&other.ptr),
             _ => false,
         }
     }
@@ -97,14 +99,17 @@ impl fmt::Display for ObjectRef {
 #[derive(Debug)]
 pub(crate) struct Object {
     /// A pointer to the next object in the linked list of allocated objects.
-    pub(crate) next: Option<ObjectRef>,
+    pub(crate) next: Cell<Option<ObjectRef>>,
     /// The object's data.
     pub(crate) content: ObjectContent,
 }
 
 impl Object {
     pub(crate) fn new(next: Option<ObjectRef>, content: ObjectContent) -> Self {
-        Self { next, content }
+        Self {
+            next: Cell::new(next),
+            content,
+        }
     }
 
     /// Cast the object to a string reference.
@@ -116,17 +121,17 @@ impl Object {
     }
 
     /// Cast the object to a upvalue reference.
-    pub(crate) fn as_upvalue(&self) -> Result<&ObjUpvalue, ObjectError> {
+    pub(crate) fn as_upvalue(&self) -> Result<Ref<'_, ObjUpvalue>, ObjectError> {
         match &self.content {
-            ObjectContent::Upvalue(u) => Ok(u),
+            ObjectContent::Upvalue(u) => Ok(u.borrow()),
             _ => Err(ObjectError::InvalidCast),
         }
     }
 
     /// Cast the object to a upvalue reference.
-    pub(crate) fn as_upvalue_mut(&mut self) -> Result<&mut ObjUpvalue, ObjectError> {
-        match &mut self.content {
-            ObjectContent::Upvalue(u) => Ok(u),
+    pub(crate) fn as_upvalue_mut(&self) -> Result<RefMut<'_, ObjUpvalue>, ObjectError> {
+        match &self.content {
+            ObjectContent::Upvalue(u) => Ok(u.borrow_mut()),
             _ => Err(ObjectError::InvalidCast),
         }
     }
@@ -134,14 +139,6 @@ impl Object {
     /// Cast the object to a closure reference.
     pub(crate) fn as_closure(&self) -> Result<&ObjClosure, ObjectError> {
         match &self.content {
-            ObjectContent::Closure(c) => Ok(c),
-            _ => Err(ObjectError::InvalidCast),
-        }
-    }
-
-    /// Cast the object to a closure reference.
-    pub(crate) fn as_closure_mut(&mut self) -> Result<&mut ObjClosure, ObjectError> {
-        match &mut self.content {
             ObjectContent::Closure(c) => Ok(c),
             _ => Err(ObjectError::InvalidCast),
         }
@@ -168,7 +165,7 @@ pub(crate) enum ObjectContent {
     /// A heap allocated string
     String(Rc<str>),
     /// A heap allocated value hoisted from the stack.
-    Upvalue(ObjUpvalue),
+    Upvalue(RefCell<ObjUpvalue>),
     /// A closure that can captured surrounding variables
     Closure(ObjClosure),
     /// A function object
@@ -187,7 +184,7 @@ impl fmt::Display for ObjectContent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         match self {
             Self::String(s) => write!(f, "{s}"),
-            Self::Upvalue(u) => write!(f, "{u}"),
+            Self::Upvalue(u) => write!(f, "{}", u.borrow()),
             Self::Closure(c) => write!(f, "{c}"),
             Self::Fun(fun) => write!(f, "{fun}"),
             Self::NativeFun(fun) => write!(f, "{fun}"),
@@ -214,12 +211,12 @@ impl ObjClosure {
     }
 
     pub(crate) fn mark_references(
-        &mut self,
+        &self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<NonNull<Object>>,
+        black_objects: &HashSet<*mut Object>,
     ) {
         self.fun.mark(grey_objects, black_objects);
-        for upvalue in &mut self.upvalues {
+        for upvalue in &self.upvalues {
             upvalue.mark(grey_objects, black_objects);
         }
     }
@@ -247,7 +244,7 @@ impl ObjUpvalue {
     pub(crate) fn mark_references(
         &mut self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<NonNull<Object>>,
+        black_objects: &HashSet<*mut Object>,
     ) {
         if let ObjUpvalue::Closed(Value::Object(obj)) = self {
             obj.mark(grey_objects, black_objects);
@@ -284,12 +281,12 @@ impl ObjFun {
     }
 
     pub(crate) fn mark_references(
-        &mut self,
+        &self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<NonNull<Object>>,
+        black_objects: &HashSet<*mut Object>,
     ) {
         for constant in &self.chunk.constants {
-            if let Value::Object(mut obj) = constant {
+            if let Value::Object(obj) = constant {
                 obj.mark(grey_objects, black_objects);
             }
         }

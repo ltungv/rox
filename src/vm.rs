@@ -2,8 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    ops::{Add, Div, Mul, Neg, Not, Sub},
-    ptr::NonNull,
+    ops::{Add, Deref, DerefMut, Div, Mul, Neg, Not, Sub},
     rc::Rc,
 };
 
@@ -67,7 +66,7 @@ pub struct VirtualMachine {
     open_upvalues: Vec<ObjectRef>,
     globals: HashMap<Rc<str>, Value>,
     grey_objects: Vec<ObjectRef>,
-    black_objects: HashSet<NonNull<Object>>,
+    black_objects: HashSet<*mut Object>,
     heap: Heap,
 }
 
@@ -261,15 +260,18 @@ impl VirtualMachine {
         };
     }
 
+    #[allow(unsafe_code)]
     fn mark_sweep(&mut self) {
         self.grey_objects.clear();
         self.black_objects.clear();
         self.mark_roots();
         while let Some(mut grey_object) = self.grey_objects.pop() {
-            self.black_objects.insert(grey_object.0);
+            self.black_objects.insert(grey_object.as_ptr());
             grey_object.mark_references(&mut self.grey_objects, &self.black_objects)
         }
-        self.heap.sweep(&self.black_objects);
+        // SAFETY: We make sure that the sweep step has correctly mark all reachable objects, so
+        // sweep can be run safely.
+        unsafe { self.heap.sweep(&self.black_objects) };
     }
 
     fn mark_roots(&mut self) {
@@ -431,17 +433,22 @@ impl<'vm> Task<'vm> {
     fn set_upvalue(&mut self) -> Result<(), RuntimeError> {
         let upvalue_slot = self.read_byte()?;
         let value = *self.vm.stack_top(0);
-        let closure = self.vm.frame_mut().closure_mut();
-        let upvalue_object = &mut closure.upvalues[upvalue_slot as usize];
-        let upvalue = upvalue_object.as_upvalue_mut()?;
-        match upvalue {
-            // Value is on the stack.
-            ObjUpvalue::Open(stack_slot) => {
-                let stack_slot = *stack_slot;
-                self.vm.stack[stack_slot] = value;
+        let stack_slot = {
+            let closure = self.vm.frame_mut().closure();
+            let upvalue_object = closure.upvalues[upvalue_slot as usize];
+            let mut upvalue = upvalue_object.as_upvalue_mut()?;
+            match upvalue.deref_mut() {
+                // Value is on the stack.
+                ObjUpvalue::Open(stack_slot) => Some(*stack_slot),
+                // Value is on the heap.
+                ObjUpvalue::Closed(v) => {
+                    *v = value;
+                    None
+                }
             }
-            // Value is on the heap.
-            ObjUpvalue::Closed(v) => *v = value,
+        };
+        if let Some(slot) = stack_slot {
+            self.vm.stack[slot] = value;
         }
         Ok(())
     }
@@ -493,9 +500,9 @@ impl<'vm> Task<'vm> {
     // stack slot that went out of scope.
     fn close_upvalues(&mut self, last: usize) -> Result<(), RuntimeError> {
         for obj in self.vm.open_upvalues.iter_mut() {
-            let upvalue = obj.as_upvalue_mut()?;
+            let mut upvalue = obj.as_upvalue_mut()?;
             // Check if we reference a slot that went out of scope.
-            let stack_slot = match upvalue {
+            let stack_slot = match upvalue.deref() {
                 ObjUpvalue::Open(slot) if *slot >= last => Some(slot),
                 _ => None,
             };
@@ -505,9 +512,13 @@ impl<'vm> Task<'vm> {
             }
         }
         // remove closed upvalues from list of open upvalues
-        self.vm
-            .open_upvalues
-            .retain(|v| matches!(&v.content, ObjectContent::Upvalue(ObjUpvalue::Open(_))));
+        self.vm.open_upvalues.retain(|v| {
+            if let ObjectContent::Upvalue(upvalue) = &v.content {
+                matches!(upvalue.borrow().deref(), ObjUpvalue::Open(_))
+            } else {
+                false
+            }
+        });
         Ok(())
     }
 
@@ -807,12 +818,6 @@ struct CallFrame {
 impl CallFrame {
     fn closure(&self) -> &ObjClosure {
         self.closure.as_closure().expect("Expect closure object.")
-    }
-
-    fn closure_mut(&mut self) -> &mut ObjClosure {
-        self.closure
-            .as_closure_mut()
-            .expect("Expect closure object.")
     }
 
     /// Read the next byte in the stream of bytecode instructions.

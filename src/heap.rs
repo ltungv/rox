@@ -1,7 +1,7 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     mem,
-    ptr::NonNull,
     rc::Rc,
 };
 
@@ -40,7 +40,7 @@ impl Heap {
 
     /// Allocates a new upvalue object using the content of the input string.
     pub(crate) fn alloc_upvalue(&mut self, upvalue: ObjUpvalue) -> ObjectRef {
-        self.alloc(ObjectContent::Upvalue(upvalue))
+        self.alloc(ObjectContent::Upvalue(RefCell::new(upvalue)))
     }
 
     /// Allocates a new closure object.
@@ -86,18 +86,26 @@ impl Heap {
         next
     }
 
-    pub(crate) fn sweep(&mut self, black_objects: &HashSet<NonNull<Object>>) {
+    /// Release all objects whose address is not included in the hash set. This method also remove
+    /// the intern strings when objects no long reference them.
+    ///
+    /// ## Safety
+    ///
+    /// We must ensure that no other piece of our code will ever use the references that are not in
+    /// the hash set, otherwise we'll invalidate references that are in used.
+    #[allow(unsafe_code)]
+    pub(crate) unsafe fn sweep(&mut self, black_objects: &HashSet<*mut Object>) {
         let mut prev_obj: Option<ObjectRef> = None;
         let mut curr_obj = self.head;
 
         while let Some(curr_ref) = curr_obj {
-            if black_objects.contains(&curr_ref.0) {
+            if black_objects.contains(&curr_ref.as_ptr()) {
                 prev_obj = curr_obj;
-                curr_obj = curr_ref.next;
+                curr_obj = curr_ref.next.get();
             } else {
-                curr_obj = curr_ref.next;
-                if let Some(ref mut prev_ref) = prev_obj {
-                    prev_ref.next = curr_ref.next;
+                curr_obj = curr_ref.next.get();
+                if let Some(prev_ref) = prev_obj {
+                    prev_ref.next.swap(&curr_ref.next);
                 } else {
                     self.head = curr_obj;
                 }
@@ -116,40 +124,34 @@ impl Heap {
     /// Allocates a new object and returns a handle to it. The object is pushed to the head of
     /// the list of allocated data.
     fn alloc(&mut self, content: ObjectContent) -> ObjectRef {
-        let object = Box::new(Object::new(self.head, content));
-        let object_sz = mem::size_of_val(&object);
-        self.alloc_bytes += object_sz;
+        let boxed = Box::new(Object::new(self.head, content));
+        let boxed_sz = mem::size_of_val(&boxed);
+        self.alloc_bytes += boxed_sz;
 
         #[cfg(feature = "dbg-heap")]
-        println!("{object:p} alloc {object} ({object_sz} bytes)");
+        println!("{boxed:p} alloc {boxed} ({boxed_sz} bytes)",);
 
-        let object_ptr = NonNull::from(Box::leak(object));
-        let object = ObjectRef::from(object_ptr);
-        self.head = Some(object);
-        object
+        let obj = ObjectRef::new(boxed);
+        self.head = Some(obj);
+        obj
     }
 
+    /// Release an object reference from the managed heap.
+    ///
+    /// ## Safety
+    ///
+    /// We must ensure that no other piece of our code will ever use this reference, otherwise we'll
+    /// invalidate a reference that is in used.
     #[allow(unsafe_code)]
-    fn release(&mut self, obj: ObjectRef) -> Box<Object> {
-        // SAFETY: If we still own a handle then the underlying data must not be deallocated.
-        // Thus, it's consume and box it.
-        let boxed = unsafe { Box::from_raw(obj.0.as_ptr()) };
+    unsafe fn release(&mut self, obj: ObjectRef) -> Box<Object> {
+        let boxed = Box::from_raw(obj.as_ptr());
         let boxed_sz = mem::size_of_val(&boxed);
         self.alloc_bytes -= boxed_sz;
 
         #[cfg(feature = "dbg-heap")]
-        println!("{:p} free {obj} ({boxed_sz} bytes)", obj.0);
+        println!("{boxed:p} free {boxed} ({boxed_sz} bytes)");
 
         boxed
-    }
-
-    /// Remove the object at the head of the linked list.
-    fn pop(&mut self) -> Option<ObjectContent> {
-        self.head.map(|head| {
-            self.head = head.next;
-            let object = self.release(head);
-            object.content
-        })
     }
 
     #[cfg(feature = "dbg-heap")]
@@ -163,8 +165,13 @@ impl Heap {
 }
 
 impl Drop for Heap {
+    #[allow(unsafe_code)]
     fn drop(&mut self) {
-        while self.pop().is_some() {}
+        // Safety: If the heap is drop then both the compiler and vm will no longer be in use so
+        // deallocating all objects is safe.
+        for object in self.into_iter() {
+            unsafe { self.release(object) };
+        }
     }
 }
 
@@ -188,7 +195,7 @@ impl Iterator for HeapIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(node) = self.next {
-            self.next = node.next;
+            self.next = node.next.get();
             return Some(node);
         }
         None
