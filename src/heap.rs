@@ -18,9 +18,12 @@ const GC_NEXT_THRESHOLD: usize = 1024 * 1024;
 const GC_GROWTH_FACTOR: usize = 2;
 
 /// A managed heap that use `ObjectRef` to give out references to allocated objects. Objects are
-/// linked together using an intrusive linked-list, so the heap traverse all allocated objects.
+/// linked together using an intrusive linked-list, so the heap can traverse all allocated objects.
 ///
-///
+/// Our current Heap design does not own the objects that it allocates. Instead, the references that
+/// we hand out provide shared ownership to the object. Because we control how the VM is run, we
+/// know exactly when an object can be deallocated. Thus, in the context of the VM,  `ObjectRef` is
+/// similar to a smart pointer that can deallocate itself when its no longer in use.
 #[derive(Debug)]
 pub(crate) struct Heap {
     // States for the GC.

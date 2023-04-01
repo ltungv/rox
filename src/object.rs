@@ -17,7 +17,8 @@ pub enum ObjectError {
     InvalidCast,
 }
 
-/// A reference to the heap-allocated object.
+/// A reference to the heap-allocated object providing shared ownership. The underlying pointer is
+/// ensured by the VM to always be valid, and data is cleaned using a mark and sweep GC.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ObjectRef {
     ptr: NonNull<Object>,
