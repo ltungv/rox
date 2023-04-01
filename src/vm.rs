@@ -42,6 +42,10 @@ pub enum RuntimeError {
     #[error(transparent)]
     Object(#[from] ObjectError),
 
+    /// Overflow the virtual machine's stack.
+    #[error("Stack overflow.")]
+    StackOverflow,
+
     /// Can't access a property.
     #[error("Only instances have properties.")]
     ObjectHasNoProperty,
@@ -49,10 +53,6 @@ pub enum RuntimeError {
     /// Can't access a field.
     #[error("Only instances have fields.")]
     ObjectHasNoField,
-
-    /// Overflow the virtual machine's stack.
-    #[error("Stack overflow.")]
-    StackOverflow,
 
     /// Can't find a variable in scope.
     #[error("Undefined variable '{0}'.")]
@@ -62,7 +62,7 @@ pub enum RuntimeError {
     #[error("Undefined property '{0}'.")]
     UndefinedProperty(String),
 
-    /// Can't call objects that are not supported.
+    /// Can't inherit objects that are not supported.
     #[error("Superclass must be a class.")]
     InvalidSuperclass,
 
@@ -70,7 +70,7 @@ pub enum RuntimeError {
     #[error("Can only call functions and classes.")]
     InvalidCallee,
 
-    /// Can't call objects that are not supported.
+    /// Can't invoke objects that are not supported.
     #[error("Only instances have methods.")]
     InvalidMethodInvocation,
 
