@@ -14,3 +14,11 @@ dbg-heap = []
 itertools = "0.10"
 num_enum = "0.5"
 thiserror = "1"
+rustc-hash = "1"
+
+[dev-dependencies]
+criterion = "0.4"
+
+[[bench]]
+name = "e2e"
+harness = false
