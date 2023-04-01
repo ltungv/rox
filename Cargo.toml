@@ -17,7 +17,8 @@ thiserror = "1"
 rustc-hash = "1"
 
 [dev-dependencies]
-criterion = "0.4"
+criterion = { version = "0.4", features = ["html_reports"] }
+pprof = { version = "0.11", features = ["criterion", "flamegraph"] }
 
 [[bench]]
 name = "e2e"

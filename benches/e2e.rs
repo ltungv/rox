@@ -1,4 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use pprof::criterion::{Output, PProfProfiler};
 use rox::VirtualMachine;
 
 pub fn interpret(c: &mut Criterion) {
@@ -61,5 +62,8 @@ pub fn interpret(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(e2e, interpret);
+criterion_group!(
+    name = e2e;
+    config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
+    targets = interpret);
 criterion_main!(e2e);
