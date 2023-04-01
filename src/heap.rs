@@ -122,7 +122,7 @@ impl Heap {
     /// tracing all reachable objects and hand it to `Self::sweep`.
     pub(crate) fn next_gc(&self) -> usize {
         #[cfg(not(feature = "dbg-stress-gc"))]
-        let next = self.next_gc;
+        let next = self.gc_next_threshold;
 
         #[cfg(feature = "dbg-stress-gc")]
         let next = 0;
