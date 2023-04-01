@@ -1,10 +1,11 @@
 //! Implementation of the bytecode virtual machine.
 
 use std::{
-    collections::{HashMap, HashSet},
     ops::{Add, Deref, DerefMut, Div, Mul, Neg, Not, Sub},
     rc::Rc,
 };
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     compile::Parser,
@@ -89,9 +90,9 @@ pub struct VirtualMachine {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
     open_upvalues: Vec<ObjectRef>,
-    globals: HashMap<Rc<str>, Value>,
+    globals: FxHashMap<Rc<str>, Value>,
     grey_objects: Vec<ObjectRef>,
-    black_objects: HashSet<*mut Object>,
+    black_objects: FxHashSet<*mut Object>,
     heap: Heap,
 }
 
@@ -105,12 +106,12 @@ impl VirtualMachine {
     /// Create a new virtual machine that prints to the given output.
     pub fn new() -> Self {
         let mut vm = Self {
-            stack: Vec::new(),
-            frames: Vec::new(),
+            stack: Vec::with_capacity(VM_STACK_SIZE),
+            frames: Vec::with_capacity(VM_FRAMES_MAX),
             open_upvalues: Vec::new(),
-            globals: HashMap::new(),
+            globals: FxHashMap::default(),
             grey_objects: Vec::new(),
-            black_objects: HashSet::new(),
+            black_objects: FxHashSet::default(),
             heap: Heap::default(),
         };
         vm.define_native("clock", 0, clock_native)

@@ -1,12 +1,13 @@
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
-    collections::{HashMap, HashSet},
     fmt,
     marker::PhantomData,
     ops,
     ptr::NonNull,
     rc::Rc,
 };
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{chunk::Chunk, value::Value};
 
@@ -43,7 +44,7 @@ impl ObjectRef {
     pub(crate) fn mark(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<*mut Object>,
+        black_objects: &FxHashSet<*mut Object>,
     ) {
         if black_objects.contains(&self.ptr.as_ptr()) {
             return;
@@ -193,7 +194,7 @@ impl Object {
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<*mut Object>,
+        black_objects: &FxHashSet<*mut Object>,
     ) {
         match &self.content {
             ObjectContent::Upvalue(upvalue) => upvalue
@@ -271,7 +272,7 @@ impl ObjClosure {
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<*mut Object>,
+        black_objects: &FxHashSet<*mut Object>,
     ) {
         self.fun.mark(grey_objects, black_objects);
         for upvalue in &self.upvalues {
@@ -302,7 +303,7 @@ impl ObjUpvalue {
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<*mut Object>,
+        black_objects: &FxHashSet<*mut Object>,
     ) {
         if let ObjUpvalue::Closed(Value::Object(obj)) = self {
             obj.mark(grey_objects, black_objects);
@@ -344,7 +345,7 @@ impl ObjFun {
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<*mut Object>,
+        black_objects: &FxHashSet<*mut Object>,
     ) {
         for constant in &self.chunk.constants {
             if let Value::Object(obj) = constant {
@@ -389,14 +390,14 @@ pub(crate) struct ObjClass {
     /// The name of the class.
     pub(crate) name: Rc<str>,
     /// A the methods defined in the class.
-    pub(crate) methods: HashMap<Rc<str>, ObjectRef>,
+    pub(crate) methods: FxHashMap<Rc<str>, ObjectRef>,
 }
 
 impl ObjClass {
     pub(crate) fn new(name: Rc<str>) -> Self {
         Self {
             name,
-            methods: HashMap::new(),
+            methods: FxHashMap::default(),
         }
     }
 
@@ -404,7 +405,7 @@ impl ObjClass {
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<*mut Object>,
+        black_objects: &FxHashSet<*mut Object>,
     ) {
         for method in self.methods.values() {
             method.mark(grey_objects, black_objects);
@@ -422,7 +423,7 @@ impl fmt::Display for ObjClass {
 #[derive(Debug)]
 pub(crate) struct ObjInstance {
     pub(crate) class: ObjectRef,
-    pub(crate) fields: HashMap<Rc<str>, Value>,
+    pub(crate) fields: FxHashMap<Rc<str>, Value>,
 }
 
 impl ObjInstance {
@@ -430,7 +431,7 @@ impl ObjInstance {
     pub(crate) fn new(class: ObjectRef) -> Self {
         Self {
             class,
-            fields: HashMap::new(),
+            fields: FxHashMap::default(),
         }
     }
 
@@ -438,7 +439,7 @@ impl ObjInstance {
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<*mut Object>,
+        black_objects: &FxHashSet<*mut Object>,
     ) {
         self.class.mark(grey_objects, black_objects);
         for value in self.fields.values() {
@@ -467,7 +468,7 @@ impl ObjBoundMethod {
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<*mut Object>,
+        black_objects: &FxHashSet<*mut Object>,
     ) {
         if let Value::Object(o) = self.receiver {
             o.mark(grey_objects, black_objects);

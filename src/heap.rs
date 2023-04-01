@@ -1,9 +1,6 @@
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    mem,
-    rc::Rc,
-};
+use std::{cell::RefCell, mem, rc::Rc};
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::object::{
     NativeFun, ObjBoundMethod, ObjClass, ObjClosure, ObjFun, ObjInstance, ObjUpvalue, Object,
@@ -35,7 +32,7 @@ pub(crate) struct Heap {
     // all unique strings in a vector, and use a hash map to store mappings between a string and
     // its index.
     intern_str: Vec<Rc<str>>,
-    intern_ids: HashMap<Rc<str>, usize>,
+    intern_ids: FxHashMap<Rc<str>, usize>,
 
     // The head of the singly linked list of heap-allocated objects.
     head: Option<ObjectRef>,
@@ -48,7 +45,7 @@ impl Default for Heap {
             gc_next_threshold: GC_NEXT_THRESHOLD,
             gc_growth_factor: GC_GROWTH_FACTOR,
             intern_str: Vec::new(),
-            intern_ids: HashMap::new(),
+            intern_ids: FxHashMap::default(),
             head: None,
         }
     }
@@ -108,7 +105,7 @@ impl Heap {
                 let intern_id = self.intern_str.len();
                 // Use a `Vec` so we can have an index for each string.
                 self.intern_str.push(Rc::clone(&s));
-                // Use a `HashMap` so we can quickly check for uniqueness and find the index of
+                // Use a hash map so we can quickly check for uniqueness and find the index of
                 // some interned string.
                 self.intern_ids.insert(Rc::clone(&s), intern_id);
                 s
@@ -140,7 +137,7 @@ impl Heap {
     ///
     /// We must ensure that all reachable pointers are included in `black_objects`.
     #[allow(unsafe_code)]
-    pub(crate) unsafe fn sweep(&mut self, black_objects: &HashSet<*mut Object>) {
+    pub(crate) unsafe fn sweep(&mut self, black_objects: &FxHashSet<*mut Object>) {
         let mut prev_obj: Option<ObjectRef> = None;
         let mut curr_obj = self.head;
 
@@ -162,8 +159,9 @@ impl Heap {
         #[cfg(feature = "dbg-heap")]
         self.trace_dangling_strings();
 
-        // The minimum number strong count should be 2 (1 for Vec and 1 for HashMap). Thus, any
-        // string that has `Rc::strong_count == 2` is no longer referenced and we can remove it.
+        // The minimum number strong count should be 2 (1 for the vec and 1 for the hash map).
+        // Thus, any string that has `Rc::strong_count == 2` is no longer referenced and we can
+        // remove it.
         self.intern_str.retain(|s| Rc::strong_count(s) > 2);
         self.intern_ids.retain(|k, _| Rc::strong_count(k) > 2);
 

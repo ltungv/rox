@@ -3,12 +3,25 @@ use crate::{opcode::Opcode, scan::Line, value::Value};
 #[cfg(feature = "dbg-execution")]
 use crate::vm::JumpDirection;
 
+/// Max number of constants a chunk can contain.
+pub const MAX_CONSTANTS: usize = u8::MAX as usize + 1;
+
 /// A chunk holds a sequence of instructions to be executes and their data.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Chunk {
     pub(crate) constants: Vec<Value>,
     pub(crate) instructions: Vec<u8>,
     lines: Vec<RunLength<Line>>,
+}
+
+impl Default for Chunk {
+    fn default() -> Self {
+        Self {
+            constants: Vec::with_capacity(MAX_CONSTANTS),
+            instructions: Vec::new(),
+            lines: Vec::new(),
+        }
+    }
 }
 
 impl Chunk {

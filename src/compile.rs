@@ -1,6 +1,7 @@
 //! Implementation of the bytecode compiler for the Lox lanaguage.
 
 use crate::{
+    chunk::MAX_CONSTANTS,
     heap::Heap,
     object::ObjFun,
     opcode::Opcode,
@@ -10,9 +11,6 @@ use crate::{
 
 #[cfg(feature = "dbg-execution")]
 use crate::chunk::disassemble_chunk;
-
-/// Max number of constants a chunk can contain.
-const MAX_CONSTANTS: usize = u8::MAX as usize + 1;
 
 /// Max number of parameters a function can accept.
 const MAX_PARAMS: usize = u8::MAX as usize;
@@ -1417,16 +1415,20 @@ impl<'src> Compiler<'src> {
             FunctionType::Method | FunctionType::Initializer => "this",
             _ => "",
         };
+
+        let mut locals = Vec::with_capacity(MAX_LOCALS);
+        locals.push(Local {
+            name: first_slot_name,
+            depth: 0,
+            is_captured: false,
+        });
+
         Self {
             fun,
             fun_type,
             scope_depth: 0,
-            locals: vec![Local {
-                name: first_slot_name,
-                depth: 0,
-                is_captured: false,
-            }],
-            upvalues: Vec::new(),
+            locals,
+            upvalues: Vec::with_capacity(MAX_UPVALUES),
         }
     }
 }
