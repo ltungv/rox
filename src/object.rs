@@ -10,6 +10,7 @@ use std::{
 
 use crate::{chunk::Chunk, value::Value};
 
+/// An enumeration of all potential errors that occur when working with objects.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ObjectError {
     #[error("Invalid cast.")]
@@ -24,6 +25,7 @@ pub(crate) struct ObjectRef {
 }
 
 impl ObjectRef {
+    /// Create a new object reference by leaking the given box.
     pub(crate) fn new(boxed: Box<Object>) -> Self {
         Self {
             ptr: NonNull::from(Box::leak(boxed)),
@@ -31,10 +33,12 @@ impl ObjectRef {
         }
     }
 
+    /// Return the raw pointer to the object.
     pub(crate) fn as_ptr(&self) -> *mut Object {
         self.ptr.as_ptr()
     }
 
+    /// Put the current object reference in `grey_objects` if its not in `black_objects`.
     pub(crate) fn mark(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
@@ -48,30 +52,6 @@ impl ObjectRef {
         println!("{:p} mark {self}", self.ptr);
 
         grey_objects.push(*self);
-    }
-
-    pub(crate) fn mark_references(
-        &self,
-        grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &HashSet<*mut Object>,
-    ) {
-        match &self.content {
-            ObjectContent::Upvalue(upvalue) => upvalue
-                .borrow()
-                .mark_references(grey_objects, black_objects),
-            ObjectContent::Closure(closure) => closure.mark_references(grey_objects, black_objects),
-            ObjectContent::Fun(fun) => fun.mark_references(grey_objects, black_objects),
-            ObjectContent::Class(class) => {
-                class.borrow().mark_references(grey_objects, black_objects)
-            }
-            ObjectContent::Instance(instance) => instance
-                .borrow()
-                .mark_references(grey_objects, black_objects),
-            ObjectContent::BoundMethod(method) => {
-                method.mark_references(grey_objects, black_objects)
-            }
-            ObjectContent::String(_) | ObjectContent::NativeFun(_) => {}
-        }
     }
 }
 
@@ -119,6 +99,8 @@ pub(crate) struct Object {
 }
 
 impl Object {
+    /// Create a new object given its content and the pointer to the next object in the linked list
+    /// of allocated objects.
     pub(crate) fn new(next: Option<ObjectRef>, content: ObjectContent) -> Self {
         Self {
             next: Cell::new(next),
@@ -142,7 +124,7 @@ impl Object {
         }
     }
 
-    /// Cast the object to a upvalue reference.
+    /// Cast the object to a mutable upvalue reference.
     pub(crate) fn as_upvalue_mut(&self) -> Result<RefMut<'_, ObjUpvalue>, ObjectError> {
         match &self.content {
             ObjectContent::Upvalue(u) => Ok(u.borrow_mut()),
@@ -174,7 +156,7 @@ impl Object {
         }
     }
 
-    /// Cast the object to a class definition reference.
+    /// Cast the object to a mutable class definition reference.
     pub(crate) fn as_class_mut(&self) -> Result<RefMut<'_, ObjClass>, ObjectError> {
         match &self.content {
             ObjectContent::Class(c) => Ok(c.borrow_mut()),
@@ -205,6 +187,31 @@ impl Object {
             _ => Err(ObjectError::InvalidCast),
         }
     }
+
+    /// Mark all object references that can be directly access by the current object.
+    pub(crate) fn mark_references(
+        &self,
+        grey_objects: &mut Vec<ObjectRef>,
+        black_objects: &HashSet<*mut Object>,
+    ) {
+        match &self.content {
+            ObjectContent::Upvalue(upvalue) => upvalue
+                .borrow()
+                .mark_references(grey_objects, black_objects),
+            ObjectContent::Closure(closure) => closure.mark_references(grey_objects, black_objects),
+            ObjectContent::Fun(fun) => fun.mark_references(grey_objects, black_objects),
+            ObjectContent::Class(class) => {
+                class.borrow().mark_references(grey_objects, black_objects)
+            }
+            ObjectContent::Instance(instance) => instance
+                .borrow()
+                .mark_references(grey_objects, black_objects),
+            ObjectContent::BoundMethod(method) => {
+                method.mark_references(grey_objects, black_objects)
+            }
+            ObjectContent::String(_) | ObjectContent::NativeFun(_) => {}
+        }
+    }
 }
 
 impl fmt::Display for Object {
@@ -216,11 +223,11 @@ impl fmt::Display for Object {
 /// A enumeration of all supported object types in Lox and their underlying value.
 #[derive(Debug)]
 pub(crate) enum ObjectContent {
-    /// A heap allocated string
+    /// A string object
     String(Rc<str>),
-    /// A heap allocated value hoisted from the stack.
+    /// An upvalue object
     Upvalue(RefCell<ObjUpvalue>),
-    /// A closure that can captured surrounding variables
+    /// A closure object
     Closure(ObjClosure),
     /// A function object
     Fun(ObjFun),
@@ -228,9 +235,9 @@ pub(crate) enum ObjectContent {
     NativeFun(NativeFun),
     /// A class object
     Class(RefCell<ObjClass>),
-    /// A class instance
+    /// A class instance object
     Instance(RefCell<ObjInstance>),
-    /// A class instance
+    /// A bound method object
     BoundMethod(ObjBoundMethod),
 }
 
@@ -249,18 +256,17 @@ impl fmt::Display for ObjectContent {
     }
 }
 
+/// The content of an heap-allocated closure object.
 #[derive(Debug)]
 pub(crate) struct ObjClosure {
     // The function definition of this closure.
     pub(crate) fun: ObjectRef,
+    // The variables captured by this closure.
     pub(crate) upvalues: Vec<ObjectRef>,
 }
 
 impl ObjClosure {
-    pub(crate) fn new(fun: ObjectRef, upvalues: Vec<ObjectRef>) -> Self {
-        Self { fun, upvalues }
-    }
-
+    /// Mark all object references that can be directly access by the current object.
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
@@ -279,7 +285,7 @@ impl fmt::Display for ObjClosure {
     }
 }
 
-/// An upvalue represented variables that can be captured by a closure.
+/// The content of an heap-allocated upvalue object.
 #[derive(Debug)]
 pub(crate) enum ObjUpvalue {
     /// An open upvalue references a stack slot and represents a variable that has not been
@@ -291,6 +297,7 @@ pub(crate) enum ObjUpvalue {
 }
 
 impl ObjUpvalue {
+    /// Mark all object references that can be directly access by the current object.
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
@@ -308,6 +315,7 @@ impl fmt::Display for ObjUpvalue {
     }
 }
 
+/// The content of an heap-allocated function object.
 #[derive(Debug)]
 pub(crate) struct ObjFun {
     /// The name of the function
@@ -321,6 +329,7 @@ pub(crate) struct ObjFun {
 }
 
 impl ObjFun {
+    /// Create a new function object given its name.
     pub(crate) fn new(name: Option<Rc<str>>) -> Self {
         Self {
             name,
@@ -330,6 +339,7 @@ impl ObjFun {
         }
     }
 
+    /// Mark all object references that can be directly access by the current object.
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
@@ -352,7 +362,7 @@ impl fmt::Display for ObjFun {
     }
 }
 
-/// A native function
+/// The content of an heap-allocated native function object.
 pub(crate) struct NativeFun {
     /// Number of parameters
     pub(crate) arity: u8,
@@ -372,10 +382,13 @@ impl fmt::Debug for NativeFun {
     }
 }
 
+/// The content of an heap-allocated class definition object.
 #[derive(Debug)]
 pub(crate) struct ObjClass {
-    pub(crate) methods: HashMap<Rc<str>, ObjectRef>,
+    /// The name of the class.
     pub(crate) name: Rc<str>,
+    /// A the methods defined in the class.
+    pub(crate) methods: HashMap<Rc<str>, ObjectRef>,
 }
 
 impl ObjClass {
@@ -386,6 +399,7 @@ impl ObjClass {
         }
     }
 
+    /// Mark all object references that can be directly access by the current object.
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
@@ -403,6 +417,7 @@ impl fmt::Display for ObjClass {
     }
 }
 
+/// The content of an heap-allocated class instance object.
 #[derive(Debug)]
 pub(crate) struct ObjInstance {
     pub(crate) class: ObjectRef,
@@ -410,6 +425,7 @@ pub(crate) struct ObjInstance {
 }
 
 impl ObjInstance {
+    /// Create a new class object given its name.
     pub(crate) fn new(class: ObjectRef) -> Self {
         Self {
             class,
@@ -417,6 +433,7 @@ impl ObjInstance {
         }
     }
 
+    /// Mark all object references that can be directly access by the current object.
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,
@@ -437,6 +454,7 @@ impl fmt::Display for ObjInstance {
     }
 }
 
+/// The content of an heap-allocated bound method object.
 #[derive(Debug)]
 pub(crate) struct ObjBoundMethod {
     pub(crate) receiver: Value,
@@ -444,10 +462,7 @@ pub(crate) struct ObjBoundMethod {
 }
 
 impl ObjBoundMethod {
-    pub(crate) fn new(receiver: Value, method: ObjectRef) -> Self {
-        Self { receiver, method }
-    }
-
+    /// Mark all object references that can be directly access by the current object.
     pub(crate) fn mark_references(
         &self,
         grey_objects: &mut Vec<ObjectRef>,

@@ -147,7 +147,10 @@ impl VirtualMachine {
         // Push the function onto the stack so GC won't remove it while we allocating the closure.
         self.stack_push(Value::Object(fun_object))?;
         // Create a closure for the script function. Note that script can't have upvalues.
-        let closure_object = self.alloc_closure(ObjClosure::new(fun_object, Vec::new()));
+        let closure_object = self.alloc_closure(ObjClosure {
+            fun: fun_object,
+            upvalues: Vec::new(),
+        });
         // Pop the fun object as we no longer need it.
         self.stack_pop();
 
@@ -211,7 +214,7 @@ impl VirtualMachine {
 
     fn trace_calls(&self) -> Result<(), RuntimeError> {
         for frame in self.frames.iter().rev() {
-            let closure_ref = frame.closure();
+            let closure_ref = frame.closure.as_closure()?;
             let fun_ref = closure_ref.fun.as_fun()?;
             let line = fun_ref.chunk.get_line(frame.ip - 1);
             match &fun_ref.name {
@@ -388,7 +391,7 @@ impl<'vm> Task<'vm> {
             {
                 self.vm.trace_stack();
                 let frame = self.vm.frame();
-                let closure_ref = frame.closure();
+                let closure_ref = frame.closure.as_closure()?;
                 let fun_ref = closure_ref.fun.as_fun()?;
                 disassemble_instruction(&fun_ref.chunk, frame.ip);
             }
@@ -511,9 +514,10 @@ impl<'vm> Task<'vm> {
         let class = class.as_class()?;
         match class.methods.get(name) {
             Some(method) => {
-                let bound = self
-                    .vm
-                    .alloc_bound_method(ObjBoundMethod::new(*self.vm.stack_top(0), *method));
+                let bound = self.vm.alloc_bound_method(ObjBoundMethod {
+                    receiver: *self.vm.stack_top(0),
+                    method: *method,
+                });
                 self.vm.stack_pop();
                 self.vm.stack_push(Value::Object(bound))?;
                 Ok(true)
@@ -611,7 +615,7 @@ impl<'vm> Task<'vm> {
     fn get_upvalue(&mut self) -> Result<(), RuntimeError> {
         let upvalue_slot = self.read_byte()?;
         let frame = self.vm.frame();
-        let closure = frame.closure();
+        let closure = frame.closure.as_closure()?;
         let upvalue_object = closure.upvalues[upvalue_slot as usize];
         let upvalue = upvalue_object.as_upvalue()?;
         match *upvalue {
@@ -633,7 +637,7 @@ impl<'vm> Task<'vm> {
         let upvalue_slot = self.read_byte()?;
         let value = *self.vm.stack_top(0);
         let stack_slot = {
-            let closure = self.vm.frame_mut().closure();
+            let closure = self.vm.frame_mut().closure.as_closure()?;
             let upvalue_object = closure.upvalues[upvalue_slot as usize];
             let mut upvalue = upvalue_object.as_upvalue_mut()?;
             match upvalue.deref_mut() {
@@ -665,12 +669,15 @@ impl<'vm> Task<'vm> {
             if is_local {
                 upvalues.push(self.capture_upvalue(self.vm.frame().slot + index)?);
             } else {
-                let closure = self.vm.frame().closure();
+                let closure = self.vm.frame().closure.as_closure()?;
                 upvalues.push(closure.upvalues[index]);
             }
         }
 
-        let closure = self.vm.alloc_closure(ObjClosure::new(fun_object, upvalues));
+        let closure = self.vm.alloc_closure(ObjClosure {
+            fun: fun_object,
+            upvalues,
+        });
         self.vm.stack_push(Value::Object(closure))?;
 
         Ok(())
@@ -1041,14 +1048,10 @@ struct CallFrame {
 }
 
 impl CallFrame {
-    fn closure(&self) -> &ObjClosure {
-        self.closure.as_closure().expect("Expect closure object.")
-    }
-
     /// Read the next byte in the stream of bytecode instructions.
     fn read_byte(&mut self) -> Result<u8, RuntimeError> {
         let byte = {
-            let closure_ref = self.closure();
+            let closure_ref = self.closure.as_closure()?;
             let fun_ref = closure_ref.fun.as_fun()?;
             fun_ref.chunk.instructions[self.ip]
         };
@@ -1059,7 +1062,7 @@ impl CallFrame {
     /// Read the next 2 bytes in the stream of bytecode instructions.
     fn read_short(&mut self) -> Result<u16, RuntimeError> {
         let short = {
-            let closure_ref = self.closure();
+            let closure_ref = self.closure.as_closure()?;
             let fun_ref = closure_ref.fun.as_fun()?;
             let hi = fun_ref.chunk.instructions[self.ip] as u16;
             let lo = fun_ref.chunk.instructions[self.ip + 1] as u16;
@@ -1073,7 +1076,7 @@ impl CallFrame {
     /// index given by the byte.
     fn read_constant(&mut self) -> Result<Value, RuntimeError> {
         let constant_id = self.read_byte()? as usize;
-        let closure_ref = self.closure();
+        let closure_ref = self.closure.as_closure()?;
         let fun_ref = closure_ref.fun.as_fun()?;
         Ok(fun_ref.chunk.constants[constant_id])
     }

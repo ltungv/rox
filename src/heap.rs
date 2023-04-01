@@ -10,14 +10,31 @@ use crate::object::{
     ObjectContent, ObjectRef,
 };
 
-/// A managed heap that cleanups memory using a tracing garbage collector.
+/// The default GC threshold when initialize.
+const GC_NEXT_THRESHOLD: usize = 1024 * 1024;
+
+/// The default GC threshold growth factor. Each time a GC is performed, we set the next GC
+/// threshold to `GC_GROWTH_FACTOR * <current_allocated_bytes>`.
+const GC_GROWTH_FACTOR: usize = 2;
+
+/// A managed heap that use `ObjectRef` to give out references to allocated objects. Objects are
+/// linked together using an intrusive linked-list, so the heap traverse all allocated objects.
+///
+///
 #[derive(Debug)]
 pub(crate) struct Heap {
+    // States for the GC.
     alloc_bytes: usize,
-    next_gc: usize,
+    gc_next_threshold: usize,
     gc_growth_factor: usize,
+
+    // We save space and speed up string comparison by interning them. We intern string by storing
+    // all unique strings in a vector, and use a hash map to store mappings between a string and
+    // its index.
     intern_str: Vec<Rc<str>>,
     intern_ids: HashMap<Rc<str>, usize>,
+
+    // The head of the singly linked list of heap-allocated objects.
     head: Option<ObjectRef>,
 }
 
@@ -25,8 +42,8 @@ impl Default for Heap {
     fn default() -> Self {
         Self {
             alloc_bytes: 0,
-            next_gc: 1024 * 1024,
-            gc_growth_factor: 2,
+            gc_next_threshold: GC_NEXT_THRESHOLD,
+            gc_growth_factor: GC_GROWTH_FACTOR,
             intern_str: Vec::new(),
             intern_ids: HashMap::new(),
             head: None,
@@ -76,24 +93,33 @@ impl Heap {
         self.alloc(ObjectContent::BoundMethod(method))
     }
 
-    /// Interned a string and return the object's content holding the reference.
+    /// Interned a string and returned a reference counted pointer to it. If the given string has
+    /// been interned, an existing `Rc<str>` is cloned and returned. Otherwise, we turn the given
+    /// string into a new `Rc<str>` and add it to our collection of unique strings.
     pub(crate) fn intern(&mut self, s: String) -> Rc<str> {
         match self.intern_ids.get(s.as_str()) {
+            // Clone the reference counted pointer, increasing its strong count.
             Some(id) => Rc::clone(&self.intern_str[*id]),
             None => {
                 let s = Rc::from(s);
                 let intern_id = self.intern_str.len();
+                // Use a `Vec` so we can have an index for each string.
                 self.intern_str.push(Rc::clone(&s));
+                // Use a `HashMap` so we can quickly check for uniqueness and find the index of
+                // some interned string.
                 self.intern_ids.insert(Rc::clone(&s), intern_id);
                 s
             }
         }
     }
 
+    /// Returned the number of bytes that are being allocated.
     pub(crate) fn size(&self) -> usize {
         self.alloc_bytes
     }
 
+    /// Returned the next GC threshold in bytes. If `Self::size() > Self::next_gc()`, the user should start
+    /// tracing all reachable objects and hand it to `Self::sweep`.
     pub(crate) fn next_gc(&self) -> usize {
         #[cfg(not(feature = "dbg-stress-gc"))]
         let next = self.next_gc;
@@ -109,8 +135,7 @@ impl Heap {
     ///
     /// ## Safety
     ///
-    /// We must ensure that no other piece of our code will ever use the references that are not in
-    /// the hash set, otherwise we'll invalidate references that are in used.
+    /// We must ensure that all reachable pointers are included in `black_objects`.
     #[allow(unsafe_code)]
     pub(crate) unsafe fn sweep(&mut self, black_objects: &HashSet<*mut Object>) {
         let mut prev_obj: Option<ObjectRef> = None;
@@ -134,9 +159,12 @@ impl Heap {
         #[cfg(feature = "dbg-heap")]
         self.trace_dangling_strings();
 
+        // The minimum number strong count should be 2 (1 for Vec and 1 for HashMap). Thus, any
+        // string that has `Rc::strong_count == 2` is no longer referenced and we can remove it.
         self.intern_str.retain(|s| Rc::strong_count(s) > 2);
         self.intern_ids.retain(|k, _| Rc::strong_count(k) > 2);
-        self.next_gc = self.alloc_bytes * self.gc_growth_factor;
+
+        self.gc_next_threshold = self.alloc_bytes * self.gc_growth_factor;
     }
 
     /// Allocates a new object and returns a handle to it. The object is pushed to the head of
@@ -158,8 +186,10 @@ impl Heap {
     ///
     /// ## Safety
     ///
-    /// We must ensure that no other piece of our code will ever use this reference, otherwise we'll
+    /// + We must ensure that no other piece of our code will ever use this reference, otherwise we'll
     /// invalidate a reference that is in used.
+    /// + Before calling this method, we must ensure that the object is removed from the linked list of
+    /// heap-allocated objects.
     #[allow(unsafe_code)]
     unsafe fn release(&mut self, obj: ObjectRef) -> Box<Object> {
         let boxed = Box::from_raw(obj.as_ptr());
