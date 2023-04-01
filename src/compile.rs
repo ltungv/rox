@@ -252,6 +252,31 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // Keep track of the number of nesting class declarations.
         self.classes.push(ClassCompiler::new());
 
+        // Inherit from parent.
+        if self.advance_if(Kind::Less) {
+            // Parse superclass name and load it onto the stack
+            self.consume(Kind::Ident, "Expect superclass name.");
+            self.variable(false);
+            if class_name.lexeme == self.token_prev.lexeme {
+                self.error_prev("A class can't inherit from itself.");
+            }
+
+            // Add a synthetic token to represent the super class and define a variable
+            // using that token.
+            self.begin_scope();
+            self.add_local(Token {
+                kind: Kind::Ident,
+                line: self.token_curr.line,
+                lexeme: "super",
+            });
+            self.define_variable(0);
+
+            // Load subclass onto the stack.
+            self.named_variable(class_name, false);
+            self.emit(Opcode::Inherit);
+            self.class_compiler_mut(0).has_super = true;
+        }
+
         // Put the class object back onto the stack.
         self.named_variable(class_name, false);
         // Parse class' methods.
@@ -262,6 +287,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.consume(Kind::RBrace, "Expect '}' after class body.");
         // Remove the class object from the stack.
         self.emit(Opcode::Pop);
+
+        // End the scope that we began when inheriting.
+        if self.class_compiler(0).has_super {
+            self.end_scope();
+        }
 
         // Remove one class nesting level.
         self.classes.pop();
@@ -738,6 +768,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             Kind::LParen => self.grouping(),
             Kind::Minus | Kind::Bang => self.unary(),
             Kind::This => self.this(),
+            Kind::Super => self.super_(),
             Kind::Ident => self.variable(can_assign),
             Kind::String => self.string(),
             Kind::Number => self.number(),
@@ -927,6 +958,48 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             return;
         }
         self.variable(false);
+    }
+
+    /// Parse the 'this' keyword as a local variable.
+    fn super_(&mut self) {
+        if self.classes.is_empty() {
+            self.error_prev("Can't use 'super' outside of a class.");
+        } else if !self.class_compiler(0).has_super {
+            self.error_prev("Can't use 'super' in a class with no superclass.");
+        }
+
+        self.consume(Kind::Dot, "Expect '.' after 'super'.");
+        self.consume(Kind::Ident, "Expect superclass method name.");
+        let name = self.identifier_constant(self.token_prev);
+
+        // Load 'this' value onto the stack.
+        self.named_variable(
+            Token {
+                kind: Kind::Ident,
+                line: self.token_curr.line,
+                lexeme: "this",
+            },
+            false,
+        );
+        let superclass_token = Token {
+            kind: Kind::Ident,
+            line: self.token_curr.line,
+            lexeme: "super",
+        };
+        if self.advance_if(Kind::LParen) {
+            // Optimization so that we don't have to create ObjBoundMethod if the super access is
+            // called immediately.
+            let argc = self.argument_list();
+            self.named_variable(superclass_token, false);
+            self.emit(Opcode::SuperInvoke);
+            self.emit_byte(name);
+            self.emit_byte(argc);
+        } else {
+            // Create ObjBoundMethod that can be assigned to some identitier.
+            self.named_variable(superclass_token, false);
+            self.emit(Opcode::GetSuper);
+            self.emit_byte(name);
+        }
     }
 
     /// Parse a variable identifier within an expression.
@@ -1194,6 +1267,16 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
     }
 
+    fn class_compiler(&self, height: usize) -> &ClassCompiler {
+        let index = self.classes.len() - height - 1;
+        &self.classes[index]
+    }
+
+    fn class_compiler_mut(&mut self, height: usize) -> &mut ClassCompiler {
+        let index = self.classes.len() - height - 1;
+        &mut self.classes[index]
+    }
+
     fn compiler(&self, height: usize) -> &Compiler<'src> {
         let index = self.compilers.len() - height - 1;
         &self.compilers[index]
@@ -1303,11 +1386,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
 /// A structure for tracking the compiler current nested classes.
 #[derive(Debug)]
-struct ClassCompiler {}
+struct ClassCompiler {
+    has_super: bool,
+}
 
 impl ClassCompiler {
     fn new() -> Self {
-        Self {}
+        Self { has_super: false }
     }
 }
 

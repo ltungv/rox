@@ -104,6 +104,7 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::SetUpvalue => disassemble_byte(chunk, offset, "OP_SET_UPVALUE"),
         Opcode::GetProperty => disassemble_constant(chunk, offset, "OP_SET_PROPERTY"),
         Opcode::SetProperty => disassemble_constant(chunk, offset, "OP_SET_PROPERTY"),
+        Opcode::GetSuper => disassemble_constant(chunk, offset, "OP_GET_SUPER"),
         Opcode::NE => disassemble_simple(offset, "OP_NE"),
         Opcode::EQ => disassemble_simple(offset, "OP_EQ"),
         Opcode::GT => disassemble_simple(offset, "OP_GT"),
@@ -127,6 +128,7 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::Loop => disassemble_jump(chunk, offset, JumpDirection::Backward, "OP_LOOP"),
         Opcode::Call => disassemble_byte(chunk, offset, "OP_CALL"),
         Opcode::Invoke => disassemble_invoke(chunk, offset, "OP_INVOKE"),
+        Opcode::SuperInvoke => disassemble_invoke(chunk, offset, "OP_SUPER_INVOKE"),
         Opcode::Closure => {
             let mut offset = offset + 1;
             let constant_id = chunk.instructions[offset] as usize;
@@ -148,8 +150,8 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::CloseUpvalue => disassemble_simple(offset, "OP_CLOSE_UPVALUE"),
         Opcode::Ret => disassemble_simple(offset, "OP_RET"),
         Opcode::Class => disassemble_constant(chunk, offset, "OP_CLASS"),
+        Opcode::Inherit => disassemble_simple(offset, "OP_INHERIT"),
         Opcode::Method => disassemble_constant(chunk, offset, "OP_METHOD"),
-        _ => unreachable!(),
     }
 }
 

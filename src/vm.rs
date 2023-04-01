@@ -63,6 +63,10 @@ pub enum RuntimeError {
     UndefinedProperty(String),
 
     /// Can't call objects that are not supported.
+    #[error("Superclass must be a class.")]
+    InvalidSuperclass,
+
+    /// Can't call objects that are not supported.
     #[error("Can only call functions and classes.")]
     InvalidCallee,
 
@@ -406,6 +410,7 @@ impl<'vm> Task<'vm> {
                 Opcode::SetUpvalue => self.set_upvalue()?,
                 Opcode::GetProperty => self.get_property()?,
                 Opcode::SetProperty => self.set_property()?,
+                Opcode::GetSuper => self.get_super()?,
                 Opcode::NE => self.ne()?,
                 Opcode::EQ => self.eq()?,
                 Opcode::GT => self.gt()?,
@@ -425,6 +430,7 @@ impl<'vm> Task<'vm> {
                 Opcode::Loop => self.jump(JumpDirection::Backward)?,
                 Opcode::Call => self.call()?,
                 Opcode::Invoke => self.invoke()?,
+                Opcode::SuperInvoke => self.super_invoke()?,
                 Opcode::Closure => self.closure()?,
                 Opcode::CloseUpvalue => self.close_upvalue()?,
                 Opcode::Ret => {
@@ -433,10 +439,20 @@ impl<'vm> Task<'vm> {
                     }
                 }
                 Opcode::Class => self.class()?,
+                Opcode::Inherit => self.inherit()?,
                 Opcode::Method => self.method()?,
-                _ => unreachable!(),
             }
         }
+        Ok(())
+    }
+
+    fn super_invoke(&mut self) -> Result<(), RuntimeError> {
+        let method_ref = self.read_constant()?.as_object()?;
+        let method = method_ref.as_string()?;
+        let argc = self.read_byte()?;
+
+        let superclass_ref = self.vm.stack_pop().as_object()?;
+        self.invoke_from_class(superclass_ref, &method, argc)?;
         Ok(())
     }
 
@@ -550,12 +566,44 @@ impl<'vm> Task<'vm> {
         Ok(())
     }
 
+    fn get_super(&mut self) -> Result<(), RuntimeError> {
+        let name_ref = self.read_constant()?.as_object()?;
+        let name = name_ref.as_string()?;
+        let superclass = self.vm.stack_pop().as_object()?;
+        if !self.bind_method(superclass, &name)? {
+            return Err(RuntimeError::UndefinedProperty(name.to_string()));
+        }
+        Ok(())
+    }
+
     fn class(&mut self) -> Result<(), RuntimeError> {
         let constant = self.read_constant()?;
         let object = constant.as_object()?;
         let name = object.as_string()?;
         let class = self.vm.alloc_class(ObjClass::new(name));
         self.vm.stack_push(Value::Object(class))?;
+        Ok(())
+    }
+
+    fn inherit(&mut self) -> Result<(), RuntimeError> {
+        let superclass_ref = self
+            .vm
+            .stack_top(1)
+            .as_object()
+            .map_err(|_| RuntimeError::InvalidSuperclass)?;
+        let superclass = superclass_ref
+            .as_class()
+            .map_err(|_| RuntimeError::InvalidSuperclass)?;
+
+        let subclass_ref = self.vm.stack_top(0).as_object()?;
+        let mut subclass = subclass_ref.as_class_mut()?;
+
+        for (method_name, method) in &superclass.methods {
+            subclass.methods.insert(Rc::clone(method_name), *method);
+        }
+
+        // subclass.methods.extend();
+        self.vm.stack_pop();
         Ok(())
     }
 
