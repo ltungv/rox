@@ -1,0 +1,15 @@
+/*
+  This function is very powerful
+  PLEASE USE WITH CARE
+*/
+fun controlFlows(n) {
+  for (var i = 1; i <= n; i = i + 1) {
+    if (i == 50) {
+      print "Yay I'm at 50";
+    } else {
+      print "I'm not at 50 :(";
+    }
+  }
+}
+
+controlFlows(50);

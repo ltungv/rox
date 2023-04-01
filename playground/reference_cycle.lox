@@ -1,0 +1,17 @@
+// This example show how reference cycle can be formed in Lox.
+// Our Lox implementation in Rust would leak memory when running
+// this example because we use reference counting instead of a
+// mark and sweep garbage collector.
+
+class Cyclic {}
+
+fun make() {
+  var c1 = Cyclic();
+  var c2 = Cyclic();
+  c1.inner = c2;
+  c2.inner = c1;
+}
+
+for (var i = 0; i < 1000; i = i + 1) {
+  make();
+}

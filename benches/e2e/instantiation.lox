@@ -1,0 +1,11 @@
+class Foo {
+  init() {}
+}
+var i = 0;
+while (i < 1000) {
+  Foo(); Foo(); Foo(); Foo(); Foo(); Foo(); Foo(); Foo();
+  Foo(); Foo(); Foo(); Foo(); Foo(); Foo(); Foo(); Foo();
+  Foo(); Foo(); Foo(); Foo(); Foo(); Foo(); Foo(); Foo();
+  Foo(); Foo(); Foo(); Foo(); Foo(); Foo();
+  i = i + 1;
+}

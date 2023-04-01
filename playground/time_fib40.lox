@@ -1,0 +1,16 @@
+fun fib(n) {
+  if (n < 2) return n;
+  return fib(n - 1) + fib(n - 2); 
+}
+
+var before = clock();
+print fib(40);
+var after = clock();
+print after - before;
+
+// 102334155
+// 467.4283502101898
+
+// rlox chapter24
+// 102334155
+// 46.92358350753784
