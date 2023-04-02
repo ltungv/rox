@@ -229,6 +229,8 @@ impl Drop for Heap {
 
         #[cfg(feature = "dbg-heap")]
         self.trace_dangling_strings();
+
+        debug_assert_eq!(0, self.alloc_bytes);
     }
 }
 
