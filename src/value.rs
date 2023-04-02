@@ -1,6 +1,6 @@
-use std::{cmp::Ordering, fmt, ops};
+use std::{cmp::Ordering, fmt, ops, rc::Rc};
 
-use crate::object::ObjectRef;
+use crate::object::Object;
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ValueError {
@@ -24,12 +24,12 @@ pub(crate) enum Value {
     /// A number value in Lox
     Number(f64),
     /// A heap-allocated object
-    Object(ObjectRef),
+    Object(Object),
 }
 
 impl Value {
     /// Cast the value as a constant string
-    pub(crate) fn as_object(&self) -> Result<ObjectRef, ValueError> {
+    pub(crate) fn as_object(&self) -> Result<Object, ValueError> {
         if let Self::Object(o) = self {
             Ok(*o)
         } else {
@@ -88,7 +88,30 @@ impl PartialEq for Value {
             (Self::Nil, Self::Nil) => true,
             (Self::Bool(v1), Self::Bool(v2)) => v1 == v2,
             (Self::Number(v1), Self::Number(v2)) => v1.eq(v2),
-            (Self::Object(o1), Self::Object(o2)) => o1.eq(o2),
+            (Self::Object(Object::String(s1)), Self::Object(Object::String(s2))) => {
+                Rc::ptr_eq(s1, s2)
+            }
+            (Self::Object(Object::Upvalue(v1)), Self::Object(Object::Upvalue(v2))) => {
+                v1.as_ptr().eq(&v2.as_ptr())
+            }
+            (Self::Object(Object::Closure(v1)), Self::Object(Object::Closure(v2))) => {
+                v1.as_ptr().eq(&v2.as_ptr())
+            }
+            (Self::Object(Object::Fun(v1)), Self::Object(Object::Fun(v2))) => {
+                v1.as_ptr().eq(&v2.as_ptr())
+            }
+            (Self::Object(Object::NativeFun(v1)), Self::Object(Object::NativeFun(v2))) => {
+                v1.as_ptr().eq(&v2.as_ptr())
+            }
+            (Self::Object(Object::Class(v1)), Self::Object(Object::Class(v2))) => {
+                v1.as_ptr().eq(&v2.as_ptr())
+            }
+            (Self::Object(Object::Instance(v1)), Self::Object(Object::Instance(v2))) => {
+                v1.as_ptr().eq(&v2.as_ptr())
+            }
+            (Self::Object(Object::BoundMethod(v1)), Self::Object(Object::BoundMethod(v2))) => {
+                v1.as_ptr().eq(&v2.as_ptr())
+            }
             _ => false,
         }
     }

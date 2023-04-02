@@ -1,15 +1,32 @@
-use std::{
-    cell::{Cell, Ref, RefCell, RefMut},
-    fmt,
-    marker::PhantomData,
-    ops,
-    ptr::NonNull,
-    rc::Rc,
-};
+use std::{cell::RefCell, fmt, rc::Rc};
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
-use crate::{chunk::Chunk, value::Value};
+use crate::{chunk::Chunk, heap::Gc, value::Value};
+
+/// A type alias for a heap-allocated string.
+pub(crate) type RefString = Gc<Rc<str>>;
+
+/// A type alias for a heap-allocated upvalue.
+pub(crate) type RefUpvalue = Gc<RefCell<ObjUpvalue>>;
+
+/// A type alias for a heap-allocated closure.
+pub(crate) type RefClosure = Gc<ObjClosure>;
+
+/// A type alias for a heap-allocated fun.
+pub(crate) type RefFun = Gc<ObjFun>;
+
+/// A type alias for a heap-allocated native fun.
+pub(crate) type RefNativeFun = Gc<ObjNativeFun>;
+
+/// A type alias for a heap-allocated class definition.
+pub(crate) type RefClass = Gc<RefCell<ObjClass>>;
+
+/// A type alias for a heap-allocated class instance.
+pub(crate) type RefInstance = Gc<RefCell<ObjInstance>>;
+
+/// A type alias for a heap-allocated bound method.
+pub(crate) type RefBoundMethod = Gc<ObjBoundMethod>;
 
 /// An enumeration of all potential errors that occur when working with objects.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
@@ -18,242 +35,179 @@ pub enum ObjectError {
     InvalidCast,
 }
 
-/// A reference to the heap-allocated object providing shared ownership. The underlying pointer is
-/// ensured by the VM to always be valid, and data is cleaned using a mark and sweep GC.
+/// A numeration of all object types.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ObjectRef {
-    ptr: NonNull<Object>,
-    obj: PhantomData<Object>,
-}
-
-impl ObjectRef {
-    /// Create a new object reference by leaking the given box.
-    pub(crate) fn new(boxed: Box<Object>) -> Self {
-        Self {
-            ptr: NonNull::from(Box::leak(boxed)),
-            obj: PhantomData,
-        }
-    }
-
-    /// Return the raw pointer to the object.
-    pub(crate) fn as_ptr(&self) -> *mut Object {
-        self.ptr.as_ptr()
-    }
-
-    /// Put the current object reference in `grey_objects` if its not in `black_objects`.
-    pub(crate) fn mark(
-        &self,
-        grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &FxHashSet<*mut Object>,
-    ) {
-        if black_objects.contains(&self.ptr.as_ptr()) {
-            return;
-        }
-
-        #[cfg(feature = "dbg-heap")]
-        println!("{:p} mark {self}", self.ptr);
-
-        grey_objects.push(*self);
-    }
-}
-
-impl ops::Deref for ObjectRef {
-    type Target = Object;
-
-    #[allow(unsafe_code)]
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: If we still own a handle then the underlying must not be deallocated. Thus, it's
-        // safe to get a reference from the raw pointer.
-        unsafe { self.ptr.as_ref() }
-    }
-}
-
-impl PartialEq for ObjectRef {
-    fn eq(&self, other: &Self) -> bool {
-        match (&self.content, &other.content) {
-            (ObjectContent::String(s1), ObjectContent::String(s2)) => Rc::ptr_eq(s1, s2),
-            (ObjectContent::Closure(_), ObjectContent::Closure(_)) => self.ptr.eq(&other.ptr),
-            (ObjectContent::Fun(_), ObjectContent::Fun(_)) => self.ptr.eq(&other.ptr),
-            (ObjectContent::NativeFun(_), ObjectContent::NativeFun(_)) => self.ptr.eq(&other.ptr),
-            (ObjectContent::Class(_), ObjectContent::Class(_)) => self.ptr.eq(&other.ptr),
-            (ObjectContent::Instance(_), ObjectContent::Instance(_)) => self.ptr.eq(&other.ptr),
-            (ObjectContent::BoundMethod(_), ObjectContent::BoundMethod(_)) => {
-                self.ptr.eq(&other.ptr)
-            }
-            _ => false,
-        }
-    }
-}
-
-impl fmt::Display for ObjectRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "{}", self.content)
-    }
-}
-
-/// The structure of a heap-allocated object.
-#[derive(Debug)]
-pub(crate) struct Object {
-    /// A pointer to the next object in the linked list of allocated objects.
-    pub(crate) next: Cell<Option<ObjectRef>>,
-    /// The object's data.
-    pub(crate) content: ObjectContent,
+pub(crate) enum Object {
+    /// A string object
+    String(RefString),
+    /// An upvalue object
+    Upvalue(RefUpvalue),
+    /// A closure object
+    Closure(RefClosure),
+    /// A function object
+    Fun(RefFun),
+    /// A native function object
+    NativeFun(RefNativeFun),
+    /// A class object
+    Class(RefClass),
+    /// A class instance object
+    Instance(RefInstance),
+    /// A bound method object
+    BoundMethod(RefBoundMethod),
 }
 
 impl Object {
-    /// Create a new object given its content and the pointer to the next object in the linked list
-    /// of allocated objects.
-    pub(crate) fn new(next: Option<ObjectRef>, content: ObjectContent) -> Self {
-        Self {
-            next: Cell::new(next),
-            content,
+    /// Case the object as a string.
+    pub(crate) fn as_string(&self) -> Result<&RefString, ObjectError> {
+        if let Self::String(s) = self {
+            Ok(s)
+        } else {
+            Err(ObjectError::InvalidCast)
         }
     }
 
-    /// Cast the object to a string reference.
-    pub(crate) fn as_string(&self) -> Result<Rc<str>, ObjectError> {
-        match &self.content {
-            ObjectContent::String(s) => Ok(Rc::clone(s)),
-            _ => Err(ObjectError::InvalidCast),
+    /// Case the object as an upvalue.
+    pub(crate) fn as_upvalue(&self) -> Result<&RefUpvalue, ObjectError> {
+        if let Self::Upvalue(u) = self {
+            Ok(u)
+        } else {
+            Err(ObjectError::InvalidCast)
         }
     }
 
-    /// Cast the object to a upvalue reference.
-    pub(crate) fn as_upvalue(&self) -> Result<Ref<'_, ObjUpvalue>, ObjectError> {
-        match &self.content {
-            ObjectContent::Upvalue(u) => Ok(u.borrow()),
-            _ => Err(ObjectError::InvalidCast),
+    /// Case the object as a closure.
+    pub(crate) fn as_closure(&self) -> Result<&RefClosure, ObjectError> {
+        if let Self::Closure(c) = self {
+            Ok(c)
+        } else {
+            Err(ObjectError::InvalidCast)
         }
     }
 
-    /// Cast the object to a mutable upvalue reference.
-    pub(crate) fn as_upvalue_mut(&self) -> Result<RefMut<'_, ObjUpvalue>, ObjectError> {
-        match &self.content {
-            ObjectContent::Upvalue(u) => Ok(u.borrow_mut()),
-            _ => Err(ObjectError::InvalidCast),
+    /// Case the object as a fun.
+    pub(crate) fn as_fun(&self) -> Result<&RefFun, ObjectError> {
+        if let Self::Fun(f) = self {
+            Ok(f)
+        } else {
+            Err(ObjectError::InvalidCast)
         }
     }
 
-    /// Cast the object to a closure reference.
-    pub(crate) fn as_closure(&self) -> Result<&ObjClosure, ObjectError> {
-        match &self.content {
-            ObjectContent::Closure(c) => Ok(c),
-            _ => Err(ObjectError::InvalidCast),
+    /// Case the object as a class.
+    pub(crate) fn as_class(&self) -> Result<&RefClass, ObjectError> {
+        if let Self::Class(c) = self {
+            Ok(c)
+        } else {
+            Err(ObjectError::InvalidCast)
         }
     }
 
-    /// Cast the object to a function reference.
-    pub(crate) fn as_fun(&self) -> Result<&ObjFun, ObjectError> {
-        match &self.content {
-            ObjectContent::Fun(f) => Ok(f),
-            _ => Err(ObjectError::InvalidCast),
+    /// Case the object as an instance.
+    pub(crate) fn as_instance(&self) -> Result<&RefInstance, ObjectError> {
+        if let Self::Instance(i) = self {
+            Ok(i)
+        } else {
+            Err(ObjectError::InvalidCast)
         }
     }
 
-    /// Cast the object to a class definition reference.
-    pub(crate) fn as_class(&self) -> Result<Ref<'_, ObjClass>, ObjectError> {
-        match &self.content {
-            ObjectContent::Class(c) => Ok(c.borrow()),
-            _ => Err(ObjectError::InvalidCast),
+    /// Mark the current object reference and put it in `grey_objects` if its has not been marked.
+    pub(crate) fn mark(&self, grey_objects: &mut Vec<Object>) {
+        match self {
+            Self::String(s) if s.mark() => grey_objects.push(*self),
+            Self::Upvalue(v) if v.mark() => grey_objects.push(*self),
+            Self::Closure(c) if c.mark() => grey_objects.push(*self),
+            Self::Fun(f) if f.mark() => grey_objects.push(*self),
+            Self::NativeFun(f) if f.mark() => grey_objects.push(*self),
+            Self::Class(c) if c.mark() => grey_objects.push(*self),
+            Self::Instance(i) if i.mark() => grey_objects.push(*self),
+            Self::BoundMethod(m) if m.mark() => grey_objects.push(*self),
+            _ => {}
         }
     }
 
-    /// Cast the object to a mutable class definition reference.
-    pub(crate) fn as_class_mut(&self) -> Result<RefMut<'_, ObjClass>, ObjectError> {
-        match &self.content {
-            ObjectContent::Class(c) => Ok(c.borrow_mut()),
-            _ => Err(ObjectError::InvalidCast),
+    /// Unmark the object.
+    pub(crate) fn unmark(&self) {
+        match self {
+            Self::String(s) => s.unmark(),
+            Self::Upvalue(v) => v.unmark(),
+            Self::Closure(c) => c.unmark(),
+            Self::Fun(f) => f.unmark(),
+            Self::NativeFun(f) => f.unmark(),
+            Self::Class(c) => c.unmark(),
+            Self::Instance(i) => i.unmark(),
+            Self::BoundMethod(m) => m.unmark(),
         }
     }
 
-    /// Cast the object to a class instance reference.
-    pub(crate) fn as_instance(&self) -> Result<Ref<'_, ObjInstance>, ObjectError> {
-        match &self.content {
-            ObjectContent::Instance(i) => Ok(i.borrow()),
-            _ => Err(ObjectError::InvalidCast),
+    /// Return whether the object is marked.
+    pub(crate) fn is_marked(&self) -> bool {
+        match self {
+            Self::String(s) => s.is_marked(),
+            Self::Upvalue(v) => v.is_marked(),
+            Self::Closure(c) => c.is_marked(),
+            Self::Fun(f) => f.is_marked(),
+            Self::NativeFun(f) => f.is_marked(),
+            Self::Class(c) => c.is_marked(),
+            Self::Instance(i) => i.is_marked(),
+            Self::BoundMethod(m) => m.is_marked(),
         }
     }
 
-    /// Cast the object to a mutable class instance reference.
-    pub(crate) fn as_instance_mut(&self) -> Result<RefMut<'_, ObjInstance>, ObjectError> {
-        match &self.content {
-            ObjectContent::Instance(i) => Ok(i.borrow_mut()),
-            _ => Err(ObjectError::InvalidCast),
+    /// Mark all object references that can be directly access by the current object and put them
+    /// in `grey_objects` if they have not been marked.
+    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+        match &self {
+            Object::Upvalue(upvalue) => upvalue.borrow().mark_references(grey_objects),
+            Object::Closure(closure) => closure.mark_references(grey_objects),
+            Object::Fun(fun) => fun.mark_references(grey_objects),
+            Object::Class(class) => class.borrow().mark_references(grey_objects),
+            Object::Instance(instance) => instance.borrow().mark_references(grey_objects),
+            Object::BoundMethod(method) => method.mark_references(grey_objects),
+            Object::String(_) | Object::NativeFun(_) => {}
         }
     }
 
-    /// Cast the object to a class instance reference.
-    pub(crate) fn as_bound_method(&self) -> Result<&ObjBoundMethod, ObjectError> {
-        match &self.content {
-            ObjectContent::BoundMethod(m) => Ok(m),
-            _ => Err(ObjectError::InvalidCast),
+    /// Get the next object reference in the linked list.
+    pub(crate) fn get_next(&self) -> Option<Self> {
+        match self {
+            Self::String(s) => s.get_next(),
+            Self::Upvalue(v) => v.get_next(),
+            Self::Closure(c) => c.get_next(),
+            Self::Fun(f) => f.get_next(),
+            Self::NativeFun(f) => f.get_next(),
+            Self::Class(c) => c.get_next(),
+            Self::Instance(i) => i.get_next(),
+            Self::BoundMethod(m) => m.get_next(),
         }
     }
 
-    /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(
-        &self,
-        grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &FxHashSet<*mut Object>,
-    ) {
-        match &self.content {
-            ObjectContent::Upvalue(upvalue) => upvalue
-                .borrow()
-                .mark_references(grey_objects, black_objects),
-            ObjectContent::Closure(closure) => closure.mark_references(grey_objects, black_objects),
-            ObjectContent::Fun(fun) => fun.mark_references(grey_objects, black_objects),
-            ObjectContent::Class(class) => {
-                class.borrow().mark_references(grey_objects, black_objects)
-            }
-            ObjectContent::Instance(instance) => instance
-                .borrow()
-                .mark_references(grey_objects, black_objects),
-            ObjectContent::BoundMethod(method) => {
-                method.mark_references(grey_objects, black_objects)
-            }
-            ObjectContent::String(_) | ObjectContent::NativeFun(_) => {}
+    /// Set the next object reference in the linked list.
+    pub(crate) fn set_next(&self, next: Option<Object>) {
+        match self {
+            Self::String(s) => s.set_next(next),
+            Self::Upvalue(v) => v.set_next(next),
+            Self::Closure(c) => c.set_next(next),
+            Self::Fun(f) => f.set_next(next),
+            Self::NativeFun(f) => f.set_next(next),
+            Self::Class(c) => c.set_next(next),
+            Self::Instance(i) => i.set_next(next),
+            Self::BoundMethod(m) => m.set_next(next),
         }
     }
 }
 
 impl fmt::Display for Object {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "{}", self.content)
-    }
-}
-
-/// A enumeration of all supported object types in Lox and their underlying value.
-#[derive(Debug)]
-pub(crate) enum ObjectContent {
-    /// A string object
-    String(Rc<str>),
-    /// An upvalue object
-    Upvalue(RefCell<ObjUpvalue>),
-    /// A closure object
-    Closure(ObjClosure),
-    /// A function object
-    Fun(ObjFun),
-    /// A native function object
-    NativeFun(NativeFun),
-    /// A class object
-    Class(RefCell<ObjClass>),
-    /// A class instance object
-    Instance(RefCell<ObjInstance>),
-    /// A bound method object
-    BoundMethod(ObjBoundMethod),
-}
-
-impl fmt::Display for ObjectContent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::String(s) => write!(f, "{s}"),
-            Self::Upvalue(u) => write!(f, "{}", u.borrow()),
-            Self::Closure(c) => write!(f, "{c}"),
-            Self::Fun(fun) => write!(f, "{fun}"),
-            Self::NativeFun(fun) => write!(f, "{fun}"),
-            Self::Class(c) => write!(f, "{}", c.borrow()),
-            Self::Instance(i) => write!(f, "{}", i.borrow()),
-            Self::BoundMethod(m) => write!(f, "{m}"),
+            Object::String(s) => write!(f, "{}", ***s),
+            Object::Upvalue(v) => write!(f, "{}", (***v).borrow()),
+            Object::Closure(c) => write!(f, "{}", ***c),
+            Object::Fun(fun) => write!(f, "{}", ***fun),
+            Object::NativeFun(fun) => write!(f, "{}", ***fun),
+            Object::Class(c) => write!(f, "{}", (***c).borrow()),
+            Object::Instance(i) => write!(f, "{}", (***i).borrow()),
+            Object::BoundMethod(m) => write!(f, "{}", ***m),
         }
     }
 }
@@ -262,28 +216,28 @@ impl fmt::Display for ObjectContent {
 #[derive(Debug)]
 pub(crate) struct ObjClosure {
     // The function definition of this closure.
-    pub(crate) fun: ObjectRef,
+    pub(crate) fun: RefFun,
     // The variables captured by this closure.
-    pub(crate) upvalues: Vec<ObjectRef>,
+    pub(crate) upvalues: Vec<RefUpvalue>,
 }
 
 impl ObjClosure {
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(
-        &self,
-        grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &FxHashSet<*mut Object>,
-    ) {
-        self.fun.mark(grey_objects, black_objects);
+    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+        if self.fun.mark() {
+            grey_objects.push(Object::Fun(self.fun));
+        }
         for upvalue in &self.upvalues {
-            upvalue.mark(grey_objects, black_objects);
+            if upvalue.mark() {
+                grey_objects.push(Object::Upvalue(*upvalue));
+            }
         }
     }
 }
 
 impl fmt::Display for ObjClosure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "{}", self.fun)
+        write!(f, "{}", **self.fun)
     }
 }
 
@@ -300,13 +254,9 @@ pub(crate) enum ObjUpvalue {
 
 impl ObjUpvalue {
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(
-        &self,
-        grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &FxHashSet<*mut Object>,
-    ) {
+    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
         if let ObjUpvalue::Closed(Value::Object(obj)) = self {
-            obj.mark(grey_objects, black_objects);
+            obj.mark(grey_objects);
         }
     }
 }
@@ -342,14 +292,10 @@ impl ObjFun {
     }
 
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(
-        &self,
-        grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &FxHashSet<*mut Object>,
-    ) {
+    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
         for constant in &self.chunk.constants {
             if let Value::Object(obj) = constant {
-                obj.mark(grey_objects, black_objects);
+                obj.mark(grey_objects);
             }
         }
     }
@@ -365,20 +311,20 @@ impl fmt::Display for ObjFun {
 }
 
 /// The content of an heap-allocated native function object.
-pub(crate) struct NativeFun {
+pub(crate) struct ObjNativeFun {
     /// Number of parameters
     pub(crate) arity: u8,
     /// Native function reference
     pub(crate) call: fn(&[Value]) -> Value,
 }
 
-impl fmt::Display for NativeFun {
+impl fmt::Display for ObjNativeFun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         write!(f, "<native fn>")
     }
 }
 
-impl fmt::Debug for NativeFun {
+impl fmt::Debug for ObjNativeFun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         write!(f, "<native fn>")
     }
@@ -390,7 +336,7 @@ pub(crate) struct ObjClass {
     /// The name of the class.
     pub(crate) name: Rc<str>,
     /// A the methods defined in the class.
-    pub(crate) methods: FxHashMap<Rc<str>, ObjectRef>,
+    pub(crate) methods: FxHashMap<Rc<str>, RefClosure>,
 }
 
 impl ObjClass {
@@ -402,13 +348,11 @@ impl ObjClass {
     }
 
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(
-        &self,
-        grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &FxHashSet<*mut Object>,
-    ) {
+    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
         for method in self.methods.values() {
-            method.mark(grey_objects, black_objects);
+            if method.mark() {
+                grey_objects.push(Object::Closure(*method));
+            }
         }
     }
 }
@@ -422,13 +366,13 @@ impl fmt::Display for ObjClass {
 /// The content of an heap-allocated class instance object.
 #[derive(Debug)]
 pub(crate) struct ObjInstance {
-    pub(crate) class: ObjectRef,
+    pub(crate) class: RefClass,
     pub(crate) fields: FxHashMap<Rc<str>, Value>,
 }
 
 impl ObjInstance {
     /// Create a new class object given its name.
-    pub(crate) fn new(class: ObjectRef) -> Self {
+    pub(crate) fn new(class: RefClass) -> Self {
         Self {
             class,
             fields: FxHashMap::default(),
@@ -436,15 +380,13 @@ impl ObjInstance {
     }
 
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(
-        &self,
-        grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &FxHashSet<*mut Object>,
-    ) {
-        self.class.mark(grey_objects, black_objects);
+    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+        if self.class.mark() {
+            grey_objects.push(Object::Class(self.class))
+        }
         for value in self.fields.values() {
             if let Value::Object(obj) = value {
-                obj.mark(grey_objects, black_objects);
+                obj.mark(grey_objects);
             }
         }
     }
@@ -452,7 +394,7 @@ impl ObjInstance {
 
 impl fmt::Display for ObjInstance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} instance", self.class)
+        write!(f, "{} instance", (**self.class).borrow())
     }
 }
 
@@ -460,25 +402,23 @@ impl fmt::Display for ObjInstance {
 #[derive(Debug)]
 pub(crate) struct ObjBoundMethod {
     pub(crate) receiver: Value,
-    pub(crate) method: ObjectRef,
+    pub(crate) method: RefClosure,
 }
 
 impl ObjBoundMethod {
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(
-        &self,
-        grey_objects: &mut Vec<ObjectRef>,
-        black_objects: &FxHashSet<*mut Object>,
-    ) {
+    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
         if let Value::Object(o) = self.receiver {
-            o.mark(grey_objects, black_objects);
+            o.mark(grey_objects);
         }
-        self.method.mark(grey_objects, black_objects)
+        if self.method.mark() {
+            grey_objects.push(Object::Closure(self.method))
+        }
     }
 }
 
 impl fmt::Display for ObjBoundMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.method)
+        write!(f, "{}", **self.method)
     }
 }
