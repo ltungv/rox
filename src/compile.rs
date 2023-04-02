@@ -350,7 +350,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
         // Create a constant for the compiled function.
         let compiler = self.take();
-        let fun_object = self.heap.alloc(compiler.fun, Object::Fun);
+        let (fun_object, _) = self.heap.alloc(compiler.fun, Object::Fun);
         let constant_id = self.make_constant(Value::Object(fun_object));
         self.emit(Opcode::Closure);
         self.emit_byte(constant_id);
@@ -422,7 +422,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn identifier_constant(&mut self, name: Token<'_>) -> u8 {
         let s = String::from(name.lexeme.trim_matches('"'));
         let s = self.heap.intern(s);
-        let value = Value::Object(self.heap.alloc(s, Object::String));
+        let (object, _) = self.heap.alloc(s, Object::String);
+        let value = Value::Object(object);
         self.make_constant(value)
     }
 
@@ -1124,7 +1125,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn string(&mut self) {
         let s = String::from(self.token_prev.lexeme.trim_matches('"'));
         let s = self.heap.intern(s);
-        let value = Value::Object(self.heap.alloc(s, Object::String));
+        let (object, _) = self.heap.alloc(s, Object::String);
+        let value = Value::Object(object);
         self.emit_constant(value);
     }
 

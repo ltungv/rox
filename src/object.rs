@@ -64,33 +64,6 @@ pub(crate) enum Object {
 }
 
 impl Object {
-    /// Case the object as an upvalue.
-    pub(crate) fn as_upvalue(&self) -> Result<&RefUpvalue, ObjectError> {
-        if let Self::Upvalue(u) = self {
-            Ok(u)
-        } else {
-            Err(ObjectError::InvalidCast)
-        }
-    }
-
-    /// Case the object as a closure.
-    pub(crate) fn as_closure(&self) -> Result<&RefClosure, ObjectError> {
-        if let Self::Closure(c) = self {
-            Ok(c)
-        } else {
-            Err(ObjectError::InvalidCast)
-        }
-    }
-
-    /// Case the object as a fun.
-    pub(crate) fn as_fun(&self) -> Result<&RefFun, ObjectError> {
-        if let Self::Fun(f) = self {
-            Ok(f)
-        } else {
-            Err(ObjectError::InvalidCast)
-        }
-    }
-
     /// Mark the current object reference and put it in `grey_objects` if its has not been marked.
     pub(crate) fn mark(&self, grey_objects: &mut Vec<Object>) {
         let marked = match self {
@@ -180,14 +153,14 @@ impl Object {
 
     pub(crate) fn mem_size(&self) -> usize {
         match self {
-            Object::String(s) => mem::size_of_val(&**s),
-            Object::Upvalue(v) => mem::size_of_val(&**v),
-            Object::Closure(c) => mem::size_of_val(&**c),
-            Object::Fun(f) => mem::size_of_val(&**f),
-            Object::NativeFun(f) => mem::size_of_val(&**f),
-            Object::Class(c) => mem::size_of_val(&**c),
-            Object::Instance(i) => mem::size_of_val(&**i),
-            Object::BoundMethod(m) => mem::size_of_val(&**m),
+            Object::String(s) => s.mem_size(),
+            Object::Upvalue(v) => v.mem_size(),
+            Object::Closure(c) => c.mem_size(),
+            Object::Fun(f) => f.mem_size(),
+            Object::NativeFun(f) => f.mem_size(),
+            Object::Class(c) => c.mem_size(),
+            Object::Instance(i) => i.mem_size(),
+            Object::BoundMethod(m) => m.mem_size(),
         }
     }
 
@@ -502,6 +475,10 @@ impl<T> Gc<T> {
 
     pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
         self.ptr.eq(&other.ptr)
+    }
+
+    pub(crate) fn mem_size(&self) -> usize {
+        mem::size_of_val(&**self)
     }
 
     #[cfg(feature = "dbg-heap")]

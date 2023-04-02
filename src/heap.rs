@@ -54,20 +54,21 @@ impl Default for Heap {
 impl Heap {
     /// Allocates a new object and returns a handle to it. The object is pushed to the head of
     /// the list of allocated data.
-    pub(crate) fn alloc<T, F>(&mut self, data: T, map: F) -> Object
+    pub(crate) fn alloc<T, F>(&mut self, data: T, map: F) -> (Object, Gc<T>)
     where
         F: Fn(Gc<T>) -> Object,
     {
         let boxed = Box::new(GcData::new(self.head, data));
-        let object = map(Gc::new(boxed));
-        let size = object.mem_size();
+        let content = Gc::new(boxed);
+        let size = content.mem_size();
+        let object = map(content);
 
         #[cfg(feature = "dbg-heap")]
         println!("0x{:x} alloc {object} ({size} bytes)", object.addr());
 
         self.alloc_bytes += size;
         self.head = Some(object);
-        object
+        (object, content)
     }
 
     /// Interned a string and returned a reference counted pointer to it. If the given string has

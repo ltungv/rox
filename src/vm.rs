@@ -13,7 +13,8 @@ use crate::{
     heap::Heap,
     object::{
         ObjBoundMethod, ObjClass, ObjClosure, ObjFun, ObjInstance, ObjNativeFun, ObjUpvalue,
-        Object, ObjectError, RefBoundMethod, RefClass, RefClosure, RefNativeFun, RefUpvalue,
+        Object, ObjectError, RefBoundMethod, RefClass, RefClosure, RefFun, RefInstance,
+        RefNativeFun, RefString, RefUpvalue,
     },
     opcode::Opcode,
     value::{Value, ValueError},
@@ -140,15 +141,15 @@ impl VirtualMachine {
             self.stack_push(*constant)?;
         }
         let constant_count = fun.chunk.constants.len();
-        let fun_object = self.alloc_fun(fun);
+        let (fun_object, fun_ref) = self.alloc_fun(fun);
         // Remove all added constants.
         self.stack_remove_top(constant_count);
 
         // Push the function onto the stack so GC won't remove it while we allocating the closure.
         self.stack_push(Value::Object(fun_object))?;
         // Create a closure for the script function. Note that script can't have upvalues.
-        let closure_object = self.alloc_closure(ObjClosure {
-            fun: *fun_object.as_fun()?,
+        let (closure_object, closure_ref) = self.alloc_closure(ObjClosure {
+            fun: fun_ref,
             upvalues: Vec::new(),
         });
         // Pop the fun object as we no longer need it.
@@ -158,8 +159,7 @@ impl VirtualMachine {
         self.stack_push(Value::Object(closure_object))?;
         // Start running the closure.
         let mut task = Task::new(self);
-        task.call_closure(*closure_object.as_closure()?, 0)
-            .and_then(|_| task.run())
+        task.call_closure(closure_ref, 0).and_then(|_| task.run())
     }
 
     fn frame(&self) -> &CallFrame {
@@ -230,50 +230,50 @@ impl VirtualMachine {
         call: fn(&[Value]) -> Value,
     ) -> Result<(), RuntimeError> {
         let fun_name = self.heap.intern(String::from(name));
-        let fun = self.alloc_native_fun(ObjNativeFun { arity, call });
+        let (fun, _) = self.alloc_native_fun(ObjNativeFun { arity, call });
         self.stack_push(Value::Object(fun))?;
         self.globals.insert(fun_name, *self.stack_top(0));
         self.stack_pop();
         Ok(())
     }
 
-    fn alloc_string(&mut self, s: String) -> Object {
+    fn alloc_string(&mut self, s: String) -> (Object, RefString) {
         self.gc();
         let s = self.heap.intern(s);
         self.heap.alloc(s, Object::String)
     }
 
-    fn alloc_upvalue(&mut self, upvalue: ObjUpvalue) -> Object {
+    fn alloc_upvalue(&mut self, upvalue: ObjUpvalue) -> (Object, RefUpvalue) {
         self.gc();
         self.heap.alloc(RefCell::new(upvalue), Object::Upvalue)
     }
 
-    fn alloc_closure(&mut self, closure: ObjClosure) -> Object {
+    fn alloc_closure(&mut self, closure: ObjClosure) -> (Object, RefClosure) {
         self.gc();
         self.heap.alloc(closure, Object::Closure)
     }
 
-    fn alloc_fun(&mut self, fun: ObjFun) -> Object {
+    fn alloc_fun(&mut self, fun: ObjFun) -> (Object, RefFun) {
         self.gc();
         self.heap.alloc(fun, Object::Fun)
     }
 
-    fn alloc_native_fun(&mut self, native_fun: ObjNativeFun) -> Object {
+    fn alloc_native_fun(&mut self, native_fun: ObjNativeFun) -> (Object, RefNativeFun) {
         self.gc();
         self.heap.alloc(native_fun, Object::NativeFun)
     }
 
-    fn alloc_class(&mut self, class: ObjClass) -> Object {
+    fn alloc_class(&mut self, class: ObjClass) -> (Object, RefClass) {
         self.gc();
         self.heap.alloc(RefCell::new(class), Object::Class)
     }
 
-    fn alloc_instance(&mut self, instance: ObjInstance) -> Object {
+    fn alloc_instance(&mut self, instance: ObjInstance) -> (Object, RefInstance) {
         self.gc();
         self.heap.alloc(RefCell::new(instance), Object::Instance)
     }
 
-    fn alloc_bound_method(&mut self, method: ObjBoundMethod) -> Object {
+    fn alloc_bound_method(&mut self, method: ObjBoundMethod) -> (Object, RefBoundMethod) {
         self.gc();
         self.heap.alloc(method, Object::BoundMethod)
     }
@@ -502,7 +502,7 @@ impl<'vm> Task<'vm> {
     fn bind_method(&mut self, class: RefClass, name: &str) -> Result<bool, RuntimeError> {
         match class.borrow().methods.get(name) {
             Some(method) => {
-                let bound = self.vm.alloc_bound_method(ObjBoundMethod {
+                let (bound, _) = self.vm.alloc_bound_method(ObjBoundMethod {
                     receiver: *self.vm.stack_top(0),
                     method: *method,
                 });
@@ -560,7 +560,7 @@ impl<'vm> Task<'vm> {
 
     fn class(&mut self) -> Result<(), RuntimeError> {
         let name = self.read_constant()?.as_string()?;
-        let class = self.vm.alloc_class(ObjClass::new(Rc::clone(&name)));
+        let (class, _) = self.vm.alloc_class(ObjClass::new(Rc::clone(&name)));
         self.vm.stack_push(Value::Object(class))?;
         Ok(())
     }
@@ -636,7 +636,7 @@ impl<'vm> Task<'vm> {
             }
         }
 
-        let closure = self.vm.alloc_closure(ObjClosure { fun, upvalues });
+        let (closure, _) = self.vm.alloc_closure(ObjClosure { fun, upvalues });
         self.vm.stack_push(Value::Object(closure))?;
 
         Ok(())
@@ -661,8 +661,7 @@ impl<'vm> Task<'vm> {
             }
         }
         // Make a new open upvalue.
-        let upvalue = self.vm.alloc_upvalue(ObjUpvalue::Open(location));
-        let upvalue_ref = *upvalue.as_upvalue()?;
+        let (_, upvalue_ref) = self.vm.alloc_upvalue(ObjUpvalue::Open(location));
         self.vm.open_upvalues.push(upvalue_ref);
         Ok(upvalue_ref)
     }
@@ -768,7 +767,7 @@ impl<'vm> Task<'vm> {
 
     fn call_class(&mut self, callee: RefClass, argc: u8) -> Result<(), RuntimeError> {
         // Allocate a new instance and put it on top of the stack.
-        let instance = self.vm.alloc_instance(ObjInstance::new(callee));
+        let (instance, _) = self.vm.alloc_instance(ObjInstance::new(callee));
         *self.vm.stack_top_mut(argc.into()) = Value::Object(instance);
         // Call the 'init' method if there's one
         if let Some(init) = callee.borrow().methods.get("init") {
@@ -921,7 +920,8 @@ impl<'vm> Task<'vm> {
                     let mut s = String::with_capacity(s1.len() + s1.len());
                     s.push_str(s1.as_ref());
                     s.push_str(s2.as_ref());
-                    Value::Object(self.vm.alloc_string(s))
+                    let (object, _) = self.vm.alloc_string(s);
+                    Value::Object(object)
                 }
                 _ => {
                     return Err(RuntimeError::Value(
