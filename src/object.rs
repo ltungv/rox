@@ -1,8 +1,15 @@
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    fmt,
+    marker::PhantomData,
+    mem, ops,
+    ptr::NonNull,
+    rc::Rc,
+};
 
 use rustc_hash::FxHashMap;
 
-use crate::{chunk::Chunk, heap::Gc, value::Value};
+use crate::{chunk::Chunk, value::Value};
 
 /// A type alias for a heap-allocated string.
 pub(crate) type RefString = Gc<Rc<str>>;
@@ -86,16 +93,18 @@ impl Object {
 
     /// Mark the current object reference and put it in `grey_objects` if its has not been marked.
     pub(crate) fn mark(&self, grey_objects: &mut Vec<Object>) {
-        match self {
-            Self::String(s) if s.mark() => grey_objects.push(*self),
-            Self::Upvalue(v) if v.mark() => grey_objects.push(*self),
-            Self::Closure(c) if c.mark() => grey_objects.push(*self),
-            Self::Fun(f) if f.mark() => grey_objects.push(*self),
-            Self::NativeFun(f) if f.mark() => grey_objects.push(*self),
-            Self::Class(c) if c.mark() => grey_objects.push(*self),
-            Self::Instance(i) if i.mark() => grey_objects.push(*self),
-            Self::BoundMethod(m) if m.mark() => grey_objects.push(*self),
-            _ => {}
+        let marked = match self {
+            Self::String(s) => s.mark(),
+            Self::Upvalue(v) => v.mark(),
+            Self::Closure(c) => c.mark(),
+            Self::Fun(f) => f.mark(),
+            Self::NativeFun(f) => f.mark(),
+            Self::Class(c) => c.mark(),
+            Self::Instance(i) => i.mark(),
+            Self::BoundMethod(m) => m.mark(),
+        };
+        if marked {
+            grey_objects.push(*self);
         }
     }
 
@@ -166,6 +175,19 @@ impl Object {
             Self::Class(c) => c.set_next(next),
             Self::Instance(i) => i.set_next(next),
             Self::BoundMethod(m) => m.set_next(next),
+        }
+    }
+
+    pub(crate) fn mem_size(&self) -> usize {
+        match self {
+            Object::String(s) => mem::size_of_val(&**s),
+            Object::Upvalue(v) => mem::size_of_val(&**v),
+            Object::Closure(c) => mem::size_of_val(&**c),
+            Object::Fun(f) => mem::size_of_val(&**f),
+            Object::NativeFun(f) => mem::size_of_val(&**f),
+            Object::Class(c) => mem::size_of_val(&**c),
+            Object::Instance(i) => mem::size_of_val(&**i),
+            Object::BoundMethod(m) => mem::size_of_val(&**m),
         }
     }
 
@@ -407,5 +429,102 @@ impl ObjBoundMethod {
 impl fmt::Display for ObjBoundMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", **self.method)
+    }
+}
+
+pub(crate) struct GcData<T> {
+    next: Cell<Option<Object>>,
+    marked: Cell<bool>,
+    data: T,
+}
+
+impl<T> GcData<T> {
+    pub(crate) fn new(next: Option<Object>, data: T) -> Self {
+        Self {
+            next: Cell::new(next),
+            marked: Cell::new(false),
+            data,
+        }
+    }
+
+    pub(crate) fn get_next(&self) -> Option<Object> {
+        self.next.get()
+    }
+
+    pub(crate) fn set_next(&self, next: Option<Object>) {
+        self.next.set(next);
+    }
+
+    pub(crate) fn is_marked(&self) -> bool {
+        self.marked.get()
+    }
+
+    pub(crate) fn mark(&self) -> bool {
+        if self.marked.get() {
+            return false;
+        }
+        self.marked.set(true);
+        true
+    }
+
+    pub(crate) fn unmark(&self) {
+        self.marked.set(false)
+    }
+}
+
+impl<T> ops::Deref for GcData<T> {
+    type Target = T;
+
+    #[allow(unsafe_code)]
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Gc<T> {
+    ptr: NonNull<GcData<T>>,
+    ptr_: PhantomData<GcData<T>>,
+}
+
+impl<T> Gc<T> {
+    pub(crate) fn new(boxed: Box<GcData<T>>) -> Self {
+        Self {
+            ptr: NonNull::from(Box::leak(boxed)),
+            ptr_: PhantomData,
+        }
+    }
+
+    #[allow(unsafe_code)]
+    pub(crate) unsafe fn release(self) -> Box<GcData<T>> {
+        Box::from_raw(self.ptr.as_ptr())
+    }
+
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        self.ptr.eq(&other.ptr)
+    }
+
+    #[cfg(feature = "dbg-heap")]
+    pub(crate) fn as_ptr(&self) -> *const GcData<T> {
+        self.ptr.as_ptr()
+    }
+}
+
+impl<T> ops::Deref for Gc<T> {
+    type Target = GcData<T>;
+
+    #[allow(unsafe_code)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.ptr.as_ref() }
+    }
+}
+
+impl<T> Copy for Gc<T> {}
+impl<T> Clone for Gc<T> {
+    fn clone(&self) -> Self {
+        Self {
+            ptr: self.ptr,
+            ptr_: self.ptr_,
+        }
     }
 }

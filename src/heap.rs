@@ -1,8 +1,8 @@
-use std::{cell::Cell, marker::PhantomData, mem, ops::Deref, ptr::NonNull, rc::Rc};
+use std::rc::Rc;
 
 use rustc_hash::FxHashMap;
 
-use crate::object::Object;
+use crate::object::{Gc, GcData, Object};
 
 /// The default GC threshold when initialize.
 const GC_NEXT_THRESHOLD: usize = 1024 * 1024;
@@ -56,8 +56,8 @@ impl Heap {
         F: Fn(Gc<T>) -> Object,
     {
         let boxed = Box::new(GcData::new(self.head, data));
-        let size = mem::size_of_val(&boxed);
         let object = map(Gc::new(boxed));
+        let size = object.mem_size();
 
         #[cfg(feature = "dbg-heap")]
         println!("0x{:x} alloc {object} ({size} bytes)", object.addr());
@@ -159,51 +159,38 @@ impl Heap {
     /// heap-allocated objects.
     #[allow(unsafe_code)]
     unsafe fn dealloc(&mut self, object: Object) {
+        let size = object.mem_size();
+
         #[cfg(feature = "dbg-heap")]
-        println!("0x{:x} free {object}", object.addr(),);
+        println!("0x{:x} free {object} ({size} bytes)", object.addr());
 
         match object {
             Object::String(s) => {
-                self.release(s);
+                s.release();
             }
             Object::Upvalue(v) => {
-                self.release(v);
+                v.release();
             }
             Object::Closure(c) => {
-                self.release(c);
+                c.release();
             }
             Object::Fun(f) => {
-                self.release(f);
+                f.release();
             }
             Object::NativeFun(f) => {
-                self.release(f);
+                f.release();
             }
             Object::Class(c) => {
-                self.release(c);
+                c.release();
             }
             Object::Instance(i) => {
-                self.release(i);
+                i.release();
             }
             Object::BoundMethod(m) => {
-                self.release(m);
+                m.release();
             }
         };
-    }
-
-    /// Deallocate an object's data from the managed heap.
-    ///
-    /// ## Safety
-    ///
-    /// + We must ensure that no other piece of our code will ever use this reference, otherwise we'll
-    /// invalidate a reference that is in used.
-    /// + Before calling this method, we must ensure that the object is removed from the linked list of
-    /// heap-allocated objects.
-    #[allow(unsafe_code)]
-    unsafe fn release<T>(&mut self, data: Gc<T>) -> Box<GcData<T>> {
-        let boxed = Box::from_raw(data.as_ptr());
-        let size = mem::size_of_val(&boxed);
         self.alloc_bytes -= size;
-        boxed
     }
 
     #[cfg(feature = "dbg-heap")]
@@ -251,92 +238,5 @@ impl Iterator for HeapIter {
             return Some(node);
         }
         None
-    }
-}
-
-pub(crate) struct GcData<T> {
-    next: Cell<Option<Object>>,
-    marked: Cell<bool>,
-    data: T,
-}
-
-impl<T> GcData<T> {
-    pub(crate) fn new(next: Option<Object>, data: T) -> Self {
-        Self {
-            next: Cell::new(next),
-            marked: Cell::new(false),
-            data,
-        }
-    }
-
-    pub(crate) fn get_next(&self) -> Option<Object> {
-        self.next.get()
-    }
-
-    pub(crate) fn set_next(&self, next: Option<Object>) {
-        self.next.set(next);
-    }
-
-    pub(crate) fn is_marked(&self) -> bool {
-        self.marked.get()
-    }
-
-    pub(crate) fn mark(&self) -> bool {
-        if self.marked.get() {
-            return false;
-        }
-        self.marked.set(true);
-        true
-    }
-
-    pub(crate) fn unmark(&self) {
-        self.marked.set(false)
-    }
-}
-
-impl<T> Deref for GcData<T> {
-    type Target = T;
-
-    #[allow(unsafe_code)]
-    fn deref(&self) -> &Self::Target {
-        &self.data
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct Gc<T> {
-    ptr: NonNull<GcData<T>>,
-    ptr_: PhantomData<GcData<T>>,
-}
-
-impl<T> Gc<T> {
-    pub(crate) fn new(boxed: Box<GcData<T>>) -> Self {
-        Self {
-            ptr: NonNull::from(Box::leak(boxed)),
-            ptr_: PhantomData,
-        }
-    }
-
-    pub(crate) fn as_ptr(&self) -> *mut GcData<T> {
-        self.ptr.as_ptr()
-    }
-}
-
-impl<T> Deref for Gc<T> {
-    type Target = GcData<T>;
-
-    #[allow(unsafe_code)]
-    fn deref(&self) -> &Self::Target {
-        unsafe { self.ptr.as_ref() }
-    }
-}
-
-impl<T> Copy for Gc<T> {}
-impl<T> Clone for Gc<T> {
-    fn clone(&self) -> Self {
-        Self {
-            ptr: self.ptr,
-            ptr_: self.ptr_,
-        }
     }
 }

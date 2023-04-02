@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, fmt, ops, rc::Rc};
 
-use crate::object::{Object, RefClass, RefClosure, RefFun, RefInstance, RefString};
+use crate::object::{Gc, Object, RefClass, RefClosure, RefFun, RefInstance, RefString};
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ValueError {
@@ -128,25 +128,23 @@ impl PartialEq for Value {
                 Rc::ptr_eq(s1, s2)
             }
             (Self::Object(Object::Upvalue(v1)), Self::Object(Object::Upvalue(v2))) => {
-                v1.as_ptr().eq(&v2.as_ptr())
+                Gc::ptr_eq(v1, v2)
             }
             (Self::Object(Object::Closure(v1)), Self::Object(Object::Closure(v2))) => {
-                v1.as_ptr().eq(&v2.as_ptr())
+                Gc::ptr_eq(v1, v2)
             }
-            (Self::Object(Object::Fun(v1)), Self::Object(Object::Fun(v2))) => {
-                v1.as_ptr().eq(&v2.as_ptr())
-            }
+            (Self::Object(Object::Fun(v1)), Self::Object(Object::Fun(v2))) => Gc::ptr_eq(v1, v2),
             (Self::Object(Object::NativeFun(v1)), Self::Object(Object::NativeFun(v2))) => {
-                v1.as_ptr().eq(&v2.as_ptr())
+                Gc::ptr_eq(v1, v2)
             }
             (Self::Object(Object::Class(v1)), Self::Object(Object::Class(v2))) => {
-                v1.as_ptr().eq(&v2.as_ptr())
+                Gc::ptr_eq(v1, v2)
             }
             (Self::Object(Object::Instance(v1)), Self::Object(Object::Instance(v2))) => {
-                v1.as_ptr().eq(&v2.as_ptr())
+                Gc::ptr_eq(v1, v2)
             }
             (Self::Object(Object::BoundMethod(v1)), Self::Object(Object::BoundMethod(v2))) => {
-                v1.as_ptr().eq(&v2.as_ptr())
+                Gc::ptr_eq(v1, v2)
             }
             _ => false,
         }
