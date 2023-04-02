@@ -4,6 +4,9 @@ use rustc_hash::FxHashMap;
 
 use crate::object::{Gc, GcData, Object};
 
+#[cfg(feature = "dbg-heap")]
+use std::mem;
+
 /// The default GC threshold when initialize.
 const GC_NEXT_THRESHOLD: usize = 1024 * 1024;
 
@@ -82,6 +85,14 @@ impl Heap {
                 // Use a hash map so we can quickly check for uniqueness and find the index of
                 // some interned string.
                 self.intern_ids.insert(Rc::clone(&s), intern_id);
+
+                #[cfg(feature = "dbg-heap")]
+                println!(
+                    "{:p} alloc '{s}' ({} bytes)",
+                    s.as_ptr(),
+                    mem::size_of_val(&*s)
+                );
+
                 s
             }
         }
@@ -197,7 +208,11 @@ impl Heap {
     fn trace_dangling_strings(&self) {
         for s in &self.intern_str {
             if Rc::strong_count(s) <= 2 {
-                println!("{:p} free {s}", s.as_ptr())
+                println!(
+                    "{:p} free '{s}' ({} bytes)",
+                    s.as_ptr(),
+                    mem::size_of_val(&**s)
+                )
             }
         }
     }
@@ -211,6 +226,9 @@ impl Drop for Heap {
         for object in self.into_iter() {
             unsafe { self.dealloc(object) };
         }
+
+        #[cfg(feature = "dbg-heap")]
+        self.trace_dangling_strings();
     }
 }
 
