@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt, mem, ops::Deref, rc::Rc};
+use std::{cell::RefCell, fmt, rc::Rc};
 
 use rustc_hash::FxHashMap;
 
@@ -169,6 +169,7 @@ impl Object {
         }
     }
 
+    #[cfg(feature = "dbg-heap")]
     pub(crate) fn addr(&self) -> usize {
         match self {
             Self::String(s) => s.as_ptr() as usize,
