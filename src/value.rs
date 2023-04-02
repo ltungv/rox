@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, fmt, ops, rc::Rc};
 
-use crate::object::Object;
+use crate::object::{Object, RefClass, RefClosure, RefFun, RefInstance, RefString};
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ValueError {
@@ -28,10 +28,46 @@ pub(crate) enum Value {
 }
 
 impl Value {
-    /// Cast the value as a constant string
-    pub(crate) fn as_object(&self) -> Result<Object, ValueError> {
-        if let Self::Object(o) = self {
-            Ok(*o)
+    /// Case the object as a string.
+    pub(crate) fn as_string(&self) -> Result<RefString, ValueError> {
+        if let Self::Object(Object::String(s)) = self {
+            Ok(*s)
+        } else {
+            Err(ValueError::InvalidCast)
+        }
+    }
+
+    /// Case the object as a closure.
+    pub(crate) fn as_closure(&self) -> Result<RefClosure, ValueError> {
+        if let Self::Object(Object::Closure(c)) = self {
+            Ok(*c)
+        } else {
+            Err(ValueError::InvalidCast)
+        }
+    }
+
+    /// Case the object as a fun.
+    pub(crate) fn as_fun(&self) -> Result<RefFun, ValueError> {
+        if let Self::Object(Object::Fun(f)) = self {
+            Ok(*f)
+        } else {
+            Err(ValueError::InvalidCast)
+        }
+    }
+
+    /// Case the object as a class.
+    pub(crate) fn as_class(&self) -> Result<RefClass, ValueError> {
+        if let Self::Object(Object::Class(c)) = self {
+            Ok(*c)
+        } else {
+            Err(ValueError::InvalidCast)
+        }
+    }
+
+    /// Case the object as an instance.
+    pub(crate) fn as_instance(&self) -> Result<RefInstance, ValueError> {
+        if let Self::Object(Object::Instance(i)) = self {
+            Ok(*i)
         } else {
             Err(ValueError::InvalidCast)
         }

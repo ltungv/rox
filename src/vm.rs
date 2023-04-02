@@ -446,25 +446,20 @@ impl<'vm> Task<'vm> {
     }
 
     fn super_invoke(&mut self) -> Result<(), RuntimeError> {
-        let method_ref = self.read_constant()?.as_object()?;
-        let method = method_ref.as_string()?;
+        let method = self.read_constant()?.as_string()?;
         let argc = self.read_byte()?;
 
-        let superclass_ref = self.vm.stack_pop().as_object()?;
-        self.invoke_from_class(*superclass_ref.as_class()?, method, argc)?;
+        let superclass = self.vm.stack_pop().as_class()?;
+        self.invoke_from_class(superclass, &method, argc)?;
         Ok(())
     }
 
     fn invoke(&mut self) -> Result<(), RuntimeError> {
-        let method_ref = self.read_constant()?.as_object()?;
-        let method = method_ref.as_string()?;
+        let method = self.read_constant()?.as_string()?;
         let argc = self.read_byte()?;
 
         let receiver = self.vm.stack_top(argc as usize);
-        let instance_ref = receiver
-            .as_object()
-            .map_err(|_| RuntimeError::InvalidMethodInvocation)?;
-        let instance = instance_ref
+        let instance = receiver
             .as_instance()
             .map_err(|_| RuntimeError::InvalidMethodInvocation)?;
 
@@ -472,7 +467,7 @@ impl<'vm> Task<'vm> {
             *self.vm.stack_top_mut(argc as usize) = *field;
             self.call_value(*field, argc)?;
         } else {
-            self.invoke_from_class(instance.borrow().class, method, argc)?;
+            self.invoke_from_class(instance.borrow().class, &method, argc)?;
         }
 
         Ok(())
@@ -497,16 +492,10 @@ impl<'vm> Task<'vm> {
     // Bind a method to a class definition. At this moment, a closure object should be the top most
     // item in the stack, and a class definition object should be the second top most item.
     fn method(&mut self) -> Result<(), RuntimeError> {
-        let name_ref = self.read_constant()?.as_object()?;
-        let name = name_ref.as_string()?;
-
-        let closure_ref = self.vm.stack_pop().as_object()?;
-        let closure = closure_ref.as_closure()?;
-
-        let class_ref = self.vm.stack_top(0).as_object()?;
-        let class = class_ref.as_class()?;
-
-        class.borrow_mut().methods.insert(Rc::clone(name), *closure);
+        let name = self.read_constant()?.as_string()?;
+        let closure = self.vm.stack_pop().as_closure()?;
+        let class = self.vm.stack_top(0).as_class()?;
+        class.borrow_mut().methods.insert(Rc::clone(&name), closure);
         Ok(())
     }
 
@@ -526,24 +515,19 @@ impl<'vm> Task<'vm> {
     }
 
     fn get_property(&mut self) -> Result<(), RuntimeError> {
-        let instance_obj = self
+        let name = self.read_constant()?.as_string()?;
+        let instance = self
             .vm
             .stack_top(0)
-            .as_object()
-            .map_err(|_| RuntimeError::ObjectHasNoProperty)?;
-        let instance = instance_obj
             .as_instance()
             .map_err(|_| RuntimeError::ObjectHasNoProperty)?;
-
-        let name_obj = self.read_constant()?.as_object()?;
-        let name = name_obj.as_string()?;
 
         let instance = instance.borrow();
         if let Some(value) = instance.fields.get(&***name) {
             self.vm.stack_pop();
             self.vm.stack_push(*value)?;
             Ok(())
-        } else if self.bind_method(instance.class, name)? {
+        } else if self.bind_method(instance.class, &name)? {
             Ok(())
         } else {
             Err(RuntimeError::UndefinedProperty(name.to_string()))
@@ -551,63 +535,49 @@ impl<'vm> Task<'vm> {
     }
 
     fn set_property(&mut self) -> Result<(), RuntimeError> {
+        let name = self.read_constant()?.as_string()?;
         let value = self.vm.stack_pop();
-        let instance_obj = self
+        let instance = self
             .vm
             .stack_top(0)
-            .as_object()
-            .map_err(|_| RuntimeError::ObjectHasNoField)?;
-        let instance = instance_obj
             .as_instance()
             .map_err(|_| RuntimeError::ObjectHasNoField)?;
 
-        let name_obj = self.read_constant()?.as_object()?;
-        let name = name_obj.as_string()?;
-
-        instance.borrow_mut().fields.insert(Rc::clone(name), value);
+        instance.borrow_mut().fields.insert(Rc::clone(&name), value);
         self.vm.stack_pop();
         self.vm.stack_push(value)?;
         Ok(())
     }
 
     fn get_super(&mut self) -> Result<(), RuntimeError> {
-        let name_ref = self.read_constant()?.as_object()?;
-        let name = name_ref.as_string()?;
-        let superclass = self.vm.stack_pop().as_object()?;
-        if !self.bind_method(*superclass.as_class()?, name)? {
+        let name = self.read_constant()?.as_string()?;
+        let superclass = self.vm.stack_pop().as_class()?;
+        if !self.bind_method(superclass, &name)? {
             return Err(RuntimeError::UndefinedProperty(name.to_string()));
         }
         Ok(())
     }
 
     fn class(&mut self) -> Result<(), RuntimeError> {
-        let name_ref = self.read_constant()?.as_object()?;
-        let name = name_ref.as_string()?;
-        let class = self.vm.alloc_class(ObjClass::new(Rc::clone(name)));
+        let name = self.read_constant()?.as_string()?;
+        let class = self.vm.alloc_class(ObjClass::new(Rc::clone(&name)));
         self.vm.stack_push(Value::Object(class))?;
         Ok(())
     }
 
     fn inherit(&mut self) -> Result<(), RuntimeError> {
-        let superclass_ref = self
+        let superclass = self
             .vm
             .stack_top(1)
-            .as_object()
-            .map_err(|_| RuntimeError::InvalidSuperclass)?;
-        let superclass = superclass_ref
             .as_class()
             .map_err(|_| RuntimeError::InvalidSuperclass)?;
-
-        let subclass_ref = self.vm.stack_top(0).as_object()?;
-        let subclass = subclass_ref.as_class()?;
-
+        let subclass = self.vm.stack_top(0).as_class()?;
         for (method_name, method) in &superclass.borrow().methods {
             subclass
                 .borrow_mut()
                 .methods
                 .insert(Rc::clone(method_name), *method);
         }
-
         self.vm.stack_pop();
         Ok(())
     }
@@ -654,12 +624,9 @@ impl<'vm> Task<'vm> {
     }
 
     fn closure(&mut self) -> Result<(), RuntimeError> {
-        let fun_ref = self.read_constant()?.as_object()?;
-        let fun = fun_ref.as_fun()?;
-
-        let upvalue_count = fun.upvalue_count as usize;
-        let mut upvalues = Vec::with_capacity(upvalue_count);
-        for _ in 0..upvalue_count {
+        let fun = self.read_constant()?.as_fun()?;
+        let mut upvalues = Vec::with_capacity(fun.upvalue_count as usize);
+        for _ in 0..fun.upvalue_count {
             let is_local = self.read_byte()? == 1;
             let index = self.read_byte()? as usize;
             if is_local {
@@ -669,10 +636,7 @@ impl<'vm> Task<'vm> {
             }
         }
 
-        let closure = self.vm.alloc_closure(ObjClosure {
-            fun: *fun,
-            upvalues,
-        });
+        let closure = self.vm.alloc_closure(ObjClosure { fun, upvalues });
         self.vm.stack_push(Value::Object(closure))?;
 
         Ok(())
@@ -698,8 +662,9 @@ impl<'vm> Task<'vm> {
         }
         // Make a new open upvalue.
         let upvalue = self.vm.alloc_upvalue(ObjUpvalue::Open(location));
-        self.vm.open_upvalues.push(*upvalue.as_upvalue()?);
-        Ok(*upvalue.as_upvalue()?)
+        let upvalue_ref = *upvalue.as_upvalue()?;
+        self.vm.open_upvalues.push(upvalue_ref);
+        Ok(upvalue_ref)
     }
 
     // Close all upvalues whose referenced stack slot went out of scope. Here, `last` is the lowest
@@ -866,8 +831,7 @@ impl<'vm> Task<'vm> {
 
     /// Get a global variable or return a runtime error if it was not found.
     fn get_global(&mut self) -> Result<(), RuntimeError> {
-        let name_ref = self.read_constant()?.as_object()?;
-        let name = name_ref.as_string()?;
+        let name = self.read_constant()?.as_string()?;
         let value = self
             .vm
             .globals
@@ -879,22 +843,20 @@ impl<'vm> Task<'vm> {
 
     /// Set a global variable or return a runtime error if it was not found.
     fn set_global(&mut self) -> Result<(), RuntimeError> {
-        let name_ref = self.read_constant()?.as_object()?;
-        let name = name_ref.as_string()?;
+        let name = self.read_constant()?.as_string()?;
         let value = self.vm.stack_top(0);
         if !self.vm.globals.contains_key(&***name) {
             return Err(RuntimeError::UndefinedVariable(name.to_string()));
         }
-        self.vm.globals.insert(Rc::clone(name), *value);
+        self.vm.globals.insert(Rc::clone(&name), *value);
         Ok(())
     }
 
     /// Declare a variable with some initial value.
     fn defined_global(&mut self) -> Result<(), RuntimeError> {
-        let name_ref = self.read_constant()?.as_object()?;
-        let name = name_ref.as_string()?;
+        let name = self.read_constant()?.as_string()?;
         let value = self.vm.stack_pop();
-        self.vm.globals.insert(Rc::clone(name), value);
+        self.vm.globals.insert(Rc::clone(&name), value);
         Ok(())
     }
 

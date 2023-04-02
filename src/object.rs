@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{cell::RefCell, fmt, mem, ops::Deref, rc::Rc};
 
 use rustc_hash::FxHashMap;
 
@@ -57,15 +57,6 @@ pub(crate) enum Object {
 }
 
 impl Object {
-    /// Case the object as a string.
-    pub(crate) fn as_string(&self) -> Result<&RefString, ObjectError> {
-        if let Self::String(s) = self {
-            Ok(s)
-        } else {
-            Err(ObjectError::InvalidCast)
-        }
-    }
-
     /// Case the object as an upvalue.
     pub(crate) fn as_upvalue(&self) -> Result<&RefUpvalue, ObjectError> {
         if let Self::Upvalue(u) = self {
@@ -88,24 +79,6 @@ impl Object {
     pub(crate) fn as_fun(&self) -> Result<&RefFun, ObjectError> {
         if let Self::Fun(f) = self {
             Ok(f)
-        } else {
-            Err(ObjectError::InvalidCast)
-        }
-    }
-
-    /// Case the object as a class.
-    pub(crate) fn as_class(&self) -> Result<&RefClass, ObjectError> {
-        if let Self::Class(c) = self {
-            Ok(c)
-        } else {
-            Err(ObjectError::InvalidCast)
-        }
-    }
-
-    /// Case the object as an instance.
-    pub(crate) fn as_instance(&self) -> Result<&RefInstance, ObjectError> {
-        if let Self::Instance(i) = self {
-            Ok(i)
         } else {
             Err(ObjectError::InvalidCast)
         }
@@ -193,6 +166,19 @@ impl Object {
             Self::Class(c) => c.set_next(next),
             Self::Instance(i) => i.set_next(next),
             Self::BoundMethod(m) => m.set_next(next),
+        }
+    }
+
+    pub(crate) fn addr(&self) -> usize {
+        match self {
+            Self::String(s) => s.as_ptr() as usize,
+            Self::Upvalue(v) => v.as_ptr() as usize,
+            Self::Closure(c) => c.as_ptr() as usize,
+            Self::Fun(f) => f.as_ptr() as usize,
+            Self::NativeFun(f) => f.as_ptr() as usize,
+            Self::Class(c) => c.as_ptr() as usize,
+            Self::Instance(i) => i.as_ptr() as usize,
+            Self::BoundMethod(m) => m.as_ptr() as usize,
         }
     }
 }

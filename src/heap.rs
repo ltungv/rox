@@ -57,12 +57,12 @@ impl Heap {
     {
         let boxed = Box::new(GcData::new(self.head, data));
         let size = mem::size_of_val(&boxed);
-        self.alloc_bytes += size;
+        let object = map(Gc::new(boxed));
 
         #[cfg(feature = "dbg-heap")]
-        println!("{boxed:p} alloc {size} bytes",);
+        println!("0x{:x} alloc {object} ({size} bytes)", object.addr());
 
-        let object = map(Gc::new(boxed));
+        self.alloc_bytes += size;
         self.head = Some(object);
         object
     }
@@ -159,6 +159,9 @@ impl Heap {
     /// heap-allocated objects.
     #[allow(unsafe_code)]
     unsafe fn dealloc(&mut self, object: Object) {
+        #[cfg(feature = "dbg-heap")]
+        println!("0x{:x} free {object}", object.addr(),);
+
         match object {
             Object::String(s) => {
                 self.release(s);
@@ -200,10 +203,6 @@ impl Heap {
         let boxed = Box::from_raw(data.as_ptr());
         let size = mem::size_of_val(&boxed);
         self.alloc_bytes -= size;
-
-        #[cfg(feature = "dbg-heap")]
-        println!("{boxed:p} free {size} bytes");
-
         boxed
     }
 
