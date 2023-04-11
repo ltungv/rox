@@ -1,4 +1,4 @@
-use crate::{opcode::Opcode, scan::Line, value::Value};
+use crate::{opcode::Opcode, scan::Line, stack::Stack, value::Value};
 
 #[cfg(feature = "dbg-execution")]
 use crate::vm::JumpDirection;
@@ -7,21 +7,11 @@ use crate::vm::JumpDirection;
 pub const MAX_CONSTANTS: usize = u8::MAX as usize + 1;
 
 /// A chunk holds a sequence of instructions to be executes and their data.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Chunk {
-    pub(crate) constants: Vec<Value>,
+    pub(crate) constants: Stack<Value, MAX_CONSTANTS>,
     pub(crate) instructions: Vec<u8>,
     lines: Vec<RunLength<Line>>,
-}
-
-impl Default for Chunk {
-    fn default() -> Self {
-        Self {
-            constants: Vec::with_capacity(MAX_CONSTANTS),
-            instructions: Vec::new(),
-            lines: Vec::new(),
-        }
-    }
 }
 
 impl Chunk {
@@ -86,6 +76,7 @@ pub(crate) fn disassemble_chunk(chunk: &Chunk, name: &str) {
 }
 
 /// Display an instruction in human readable format.
+#[allow(unsafe_code)]
 #[cfg(feature = "dbg-execution")]
 pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
     let line_current = chunk.get_line(offset);
@@ -145,7 +136,8 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::Closure => {
             let mut offset = offset + 1;
             let constant_id = chunk.instructions[offset] as usize;
-            let constant = &chunk.constants[constant_id];
+            // SAFETY: The compiler must work correctly.
+            let constant = unsafe { chunk.constants.at(constant_id) };
             offset += 1;
             println!("{:-16} {constant_id:4} {constant}", "OP_CLOSURE");
             let fun = constant.as_fun().expect("Expect function object.");
@@ -175,10 +167,12 @@ fn disassemble_simple(offset: usize, name: &'static str) -> usize {
 }
 
 /// Display a constant instruction in human-readable format.
+#[allow(unsafe_code)]
 #[cfg(feature = "dbg-execution")]
 fn disassemble_constant(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
     let constant_id = chunk.instructions[offset + 1] as usize;
-    let constant = &chunk.constants[constant_id];
+    // SAFETY: The compiler must work correctly.
+    let constant = unsafe { chunk.constants.at(constant_id) };
     println!("{name:-16} {constant_id:4} {constant}");
     offset + 2
 }
@@ -206,11 +200,13 @@ fn disassemble_jump(chunk: &Chunk, offset: usize, dir: JumpDirection, name: &'st
 }
 
 /// Display a invoke instruction in human-readable format.
+#[allow(unsafe_code)]
 #[cfg(feature = "dbg-execution")]
 fn disassemble_invoke(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
     let slot = chunk.instructions[offset + 1];
     let argc = chunk.instructions[offset + 2];
-    let fname = chunk.constants[slot as usize];
+    // SAFETY: The compiler must work correctly.
+    let fname = unsafe { chunk.constants.at(slot as usize) };
     println!("{name:-16} {slot:4} ({argc} args) {fname}",);
     offset + 3
 }

@@ -1235,12 +1235,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Write a constant to the currently compiling chunk.
     fn make_constant(&mut self, value: Value) -> u8 {
-        let constant_id = self.compiler_mut(0).fun.chunk.write_constant(value);
-        if constant_id >= MAX_CONSTANTS {
+        if self.compiler_mut(0).fun.chunk.constants.len() >= MAX_CONSTANTS {
             self.error_prev("Too many constants in one chunk.");
             return 0;
         }
-        constant_id as u8
+        self.compiler_mut(0).fun.chunk.write_constant(value) as u8
     }
 
     /// Start a new scope.

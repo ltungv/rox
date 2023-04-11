@@ -11,6 +11,7 @@ mod opcode;
 mod scan;
 mod value;
 mod vm;
+mod stack;
 
 pub use vm::{RuntimeError, VirtualMachine};
 

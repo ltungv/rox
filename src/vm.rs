@@ -17,6 +17,7 @@ use crate::{
         RefNativeFun, RefString, RefUpvalue,
     },
     opcode::Opcode,
+    stack::Stack,
     value::{Value, ValueError},
     InterpretError,
 };
@@ -89,8 +90,8 @@ pub enum RuntimeError {
 
 /// A bytecode virtual machine for the Lox programming language.
 pub struct VirtualMachine {
-    stack: Vec<Value>,
-    frames: Vec<CallFrame>,
+    stack: Stack<Value, VM_STACK_SIZE>,
+    frames: Stack<CallFrame, VM_FRAMES_MAX>,
     open_upvalues: Vec<RefUpvalue>,
     globals: FxHashMap<Rc<str>, Value>,
     grey_objects: Vec<Object>,
@@ -107,8 +108,8 @@ impl VirtualMachine {
     /// Create a new virtual machine that prints to the given output.
     pub fn new() -> Self {
         let mut vm = Self {
-            stack: Vec::with_capacity(VM_STACK_SIZE),
-            frames: Vec::with_capacity(VM_FRAMES_MAX),
+            stack: Stack::default(),
+            frames: Stack::default(),
             open_upvalues: Vec::new(),
             globals: FxHashMap::default(),
             grey_objects: Vec::new(),
@@ -163,13 +164,11 @@ impl VirtualMachine {
     }
 
     fn frame(&self) -> &CallFrame {
-        let index = self.frames.len() - 1;
-        &self.frames[index]
+        self.frames.top(0)
     }
 
     fn frame_mut(&mut self) -> &mut CallFrame {
-        let index = self.frames.len() - 1;
-        &mut self.frames[index]
+        self.frames.top_mut(0)
     }
 
     fn frames_push(&mut self, frame: CallFrame) -> Result<usize, RuntimeError> {
@@ -182,7 +181,7 @@ impl VirtualMachine {
     }
 
     fn frames_pop(&mut self) -> CallFrame {
-        self.frames.pop().expect("Stack empty.")
+        self.frames.pop()
     }
 
     fn stack_push(&mut self, value: Value) -> Result<(), RuntimeError> {
@@ -195,25 +194,25 @@ impl VirtualMachine {
     }
 
     fn stack_pop(&mut self) -> Value {
-        self.stack.pop().expect("Stack empty.")
+        self.stack.pop()
     }
 
     fn stack_top(&self, n: usize) -> &Value {
-        let index = self.stack.len() - n - 1;
-        &self.stack[index]
+        // SAFETY: The compiler should produce safe byte codes such that we never
+        // exhaust the stack.
+        self.stack.top(n)
     }
 
     fn stack_top_mut(&mut self, n: usize) -> &mut Value {
-        let index = self.stack.len() - n - 1;
-        &mut self.stack[index]
+        self.stack.top_mut(n)
     }
 
     fn stack_remove_top(&mut self, n: usize) {
-        self.stack.drain(self.stack.len() - n..);
+        self.stack.remove(n);
     }
 
     fn trace_calls(&self) -> Result<(), RuntimeError> {
-        for frame in self.frames.iter().rev() {
+        for frame in self.frames.into_iter().rev() {
             let line = frame.closure.fun.chunk.get_line(frame.ip - 1);
             match &frame.closure.fun.name {
                 None => eprintln!("{line} in script."),
@@ -339,7 +338,7 @@ impl VirtualMachine {
     #[cfg(feature = "dbg-execution")]
     fn trace_stack(&self) {
         print!("          ");
-        for value in self.stack.iter() {
+        for value in self.stack.into_iter() {
             print!("[ {value} ]");
         }
         println!();
@@ -583,14 +582,17 @@ impl<'vm> Task<'vm> {
     }
 
     /// Get the value of the variable capture by an upvalue.
+    #[allow(unsafe_code)]
     fn get_upvalue(&mut self) -> Result<(), RuntimeError> {
         let upvalue_slot = self.read_byte()?;
         let upvalue = self.vm.frame().closure.upvalues[upvalue_slot as usize];
         match *upvalue.borrow() {
             // Value is on the stack.
             ObjUpvalue::Open(stack_slot) => {
-                let value = self.vm.stack[stack_slot];
-                self.vm.stack_push(value)?;
+                // SAFETY: The compiler should produce safe byte codes such that we never
+                // access uninitialized data.
+                let value = unsafe { self.vm.stack.at(stack_slot) };
+                self.vm.stack_push(*value)?;
             }
             // Value is on the heap.
             ObjUpvalue::Closed(value) => {
@@ -601,6 +603,7 @@ impl<'vm> Task<'vm> {
     }
 
     /// Set the value of the variable capture by an upvalue.
+    #[allow(unsafe_code)]
     fn set_upvalue(&mut self) -> Result<(), RuntimeError> {
         let upvalue_slot = self.read_byte()?;
         let value = *self.vm.stack_top(0);
@@ -618,7 +621,9 @@ impl<'vm> Task<'vm> {
             }
         };
         if let Some(slot) = stack_slot {
-            self.vm.stack[slot] = value;
+            // SAFETY: The compiler should produce safe code that access a safe part of the stack.
+            let v = unsafe { self.vm.stack.at_mut(slot) };
+            *v = value;
         }
         Ok(())
     }
@@ -668,6 +673,7 @@ impl<'vm> Task<'vm> {
 
     // Close all upvalues whose referenced stack slot went out of scope. Here, `last` is the lowest
     // stack slot that went out of scope.
+    #[allow(unsafe_code)]
     fn close_upvalues(&mut self, last: usize) -> Result<(), RuntimeError> {
         for upvalue in &self.vm.open_upvalues {
             // Check if we reference a slot that went out of scope.
@@ -678,7 +684,9 @@ impl<'vm> Task<'vm> {
             };
             // Hoist the variable up into the upvalue so it can live after the stack frame is pop.
             if let Some(slot) = stack_slot {
-                *upvalue = ObjUpvalue::Closed(self.vm.stack[slot]);
+                // SAFETY: The compiler should produce safe code that access a safe part of the stack.
+                let v = unsafe { self.vm.stack.at(slot) };
+                *upvalue = ObjUpvalue::Closed(*v);
             }
         }
         // remove closed upvalues from list of open upvalues
@@ -697,7 +705,7 @@ impl<'vm> Task<'vm> {
         // that need to be closed over.
         self.close_upvalues(self.vm.frame().slot)?;
         let frame = self.vm.frames_pop();
-        if self.vm.frames.is_empty() {
+        if self.vm.frames.len() == 0 {
             // Have reach the end of the script if there's no stack frame left.
             self.vm.stack_pop();
             return Ok(true);
@@ -756,10 +764,9 @@ impl<'vm> Task<'vm> {
                 argc,
             });
         }
-        let sp = self.vm.stack.len();
         let argc = argc as usize;
         let call = callee.call;
-        let res = call(&self.vm.stack[sp - argc..]);
+        let res = call(self.vm.stack.topn(argc));
         self.vm.stack_remove_top(argc + 1);
         self.vm.stack_push(res)?;
         Ok(())
@@ -813,18 +820,25 @@ impl<'vm> Task<'vm> {
     }
 
     /// Get a local variable.
+    #[allow(unsafe_code)]
     fn get_local(&mut self) -> Result<(), RuntimeError> {
         let slot = self.read_byte()? as usize;
         let frame_slot = self.vm.frame().slot;
-        self.vm.stack_push(self.vm.stack[frame_slot + slot])?;
+        // SAFETY: The compiler should produce safe code that access a safe part of the stack.
+        let value = unsafe { self.vm.stack.at(frame_slot + slot) };
+        self.vm.stack_push(*value)?;
         Ok(())
     }
 
     /// Set a local variable.
+    #[allow(unsafe_code)]
     fn set_local(&mut self) -> Result<(), RuntimeError> {
         let slot = self.read_byte()? as usize;
         let frame_slot = self.vm.frame().slot;
-        self.vm.stack[frame_slot + slot] = *self.vm.stack_top(0);
+        let value = *self.vm.stack_top(0);
+        // SAFETY: The compiler should produce safe code that access a safe part of the stack.
+        let v = unsafe { self.vm.stack.at_mut(frame_slot + slot) };
+        *v = value;
         Ok(())
     }
 
@@ -1005,9 +1019,12 @@ impl CallFrame {
 
     /// Read the next byte in the stream of bytecode instructions and return the constant at the
     /// index given by the byte.
+    #[allow(unsafe_code)]
     fn read_constant(&mut self) -> Result<Value, RuntimeError> {
         let constant_id = self.read_byte()? as usize;
-        Ok(self.closure.fun.chunk.constants[constant_id])
+        // SAFETY: The compiler should produce correct byte codes.
+        let constant = unsafe { *self.closure.fun.chunk.constants.at(constant_id) };
+        Ok(constant)
     }
 }
 
