@@ -365,50 +365,71 @@ impl<'vm> Task<'vm> {
     }
 
     /// Read the next byte in the stream of bytecode instructions.
-    fn read_byte(&mut self) -> Result<u8, RuntimeError> {
-        self.vm.frame_mut().read_byte()
+    fn read_byte(&mut self, instructions: &[u8]) -> Result<u8, RuntimeError> {
+        let frame = self.vm.frame_mut();
+        let byte = instructions[frame.ip];
+        frame.ip += 1;
+        Ok(byte)
     }
 
     /// Read the next 2 bytes in the stream of bytecode instructions.
-    fn read_short(&mut self) -> Result<u16, RuntimeError> {
-        self.vm.frame_mut().read_short()
+    fn read_short(&mut self, instructions: &[u8]) -> Result<u16, RuntimeError> {
+        let frame = self.vm.frame_mut();
+        let hi = instructions[frame.ip] as u16;
+        let lo = instructions[frame.ip + 1] as u16;
+        let short = hi << 8 | lo;
+        frame.ip += 2;
+        Ok(short)
     }
 
     /// Read the next byte in the stream of bytecode instructions and return the constant at the
     /// index given by the byte.
-    fn read_constant(&mut self) -> Result<Value, RuntimeError> {
-        self.vm.frame_mut().read_constant()
+    #[allow(unsafe_code)]
+    fn read_constant(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<Value, RuntimeError> {
+        let frame = self.vm.frame_mut();
+        let constant_id = instructions[frame.ip];
+        frame.ip += 1;
+        // SAFETY: The compiler should produce correct byte codes.
+        let constant = unsafe { *constants.at(constant_id as usize) };
+        Ok(constant)
     }
 }
 
 impl<'vm> Task<'vm> {
     fn run(&mut self) -> Result<(), RuntimeError> {
+        let mut closure = self.vm.frame().closure;
+        let mut instructions = &closure.fun.chunk.instructions;
+        let mut constants = &closure.fun.chunk.constants;
         loop {
             #[cfg(feature = "dbg-execution")]
             {
                 self.vm.trace_stack();
-                let frame = self.vm.frame();
-                disassemble_instruction(&frame.closure.fun.chunk, frame.ip);
+                disassemble_instruction(&closure.fun.chunk, self.vm.frame().ip);
             }
 
-            match Opcode::try_from(self.read_byte()?)? {
-                Opcode::Const => self.constant()?,
+            let mut is_frame_changed = false;
+            match Opcode::try_from(self.read_byte(instructions)?)? {
+                Opcode::Const => self.constant(instructions, constants)?,
                 Opcode::Nil => self.vm.stack_push(Value::Nil)?,
                 Opcode::True => self.vm.stack_push(Value::Bool(true))?,
                 Opcode::False => self.vm.stack_push(Value::Bool(false))?,
                 Opcode::Pop => {
                     self.vm.stack_pop();
                 }
-                Opcode::GetLocal => self.get_local()?,
-                Opcode::SetLocal => self.set_local()?,
-                Opcode::GetGlobal => self.get_global()?,
-                Opcode::SetGlobal => self.set_global()?,
-                Opcode::DefineGlobal => self.defined_global()?,
-                Opcode::GetUpvalue => self.get_upvalue()?,
-                Opcode::SetUpvalue => self.set_upvalue()?,
-                Opcode::GetProperty => self.get_property()?,
-                Opcode::SetProperty => self.set_property()?,
-                Opcode::GetSuper => self.get_super()?,
+                Opcode::GetLocal => self.get_local(instructions)?,
+                Opcode::SetLocal => self.set_local(instructions)?,
+                Opcode::GetGlobal => self.get_global(instructions, constants)?,
+                Opcode::SetGlobal => self.set_global(instructions, constants)?,
+                Opcode::DefineGlobal => self.defined_global(instructions, constants)?,
+                Opcode::GetUpvalue => self.get_upvalue(closure, instructions)?,
+                Opcode::SetUpvalue => self.set_upvalue(closure, instructions)?,
+                Opcode::GetProperty => self.get_property(instructions, constants)?,
+                Opcode::SetProperty => self.set_property(instructions, constants)?,
+                Opcode::GetSuper => self.get_super(instructions, constants)?,
                 Opcode::NE => self.ne()?,
                 Opcode::EQ => self.eq()?,
                 Opcode::GT => self.gt()?,
@@ -422,40 +443,66 @@ impl<'vm> Task<'vm> {
                 Opcode::Not => self.not()?,
                 Opcode::Neg => self.neg()?,
                 Opcode::Print => self.print()?,
-                Opcode::Jump => self.jump(JumpDirection::Forward)?,
-                Opcode::JumpIfTrue => self.jump_if_true()?,
-                Opcode::JumpIfFalse => self.jump_if_false()?,
-                Opcode::Loop => self.jump(JumpDirection::Backward)?,
-                Opcode::Call => self.call()?,
-                Opcode::Invoke => self.invoke()?,
-                Opcode::SuperInvoke => self.super_invoke()?,
-                Opcode::Closure => self.closure()?,
+                Opcode::Jump => self.jump(JumpDirection::Forward, instructions)?,
+                Opcode::JumpIfTrue => self.jump_if_true(instructions)?,
+                Opcode::JumpIfFalse => self.jump_if_false(instructions)?,
+                Opcode::Loop => self.jump(JumpDirection::Backward, instructions)?,
+                Opcode::Call => {
+                    self.call(instructions)?;
+                    is_frame_changed = true;
+                }
+                Opcode::Invoke => {
+                    self.invoke(instructions, constants)?;
+                    is_frame_changed = true;
+                }
+                Opcode::SuperInvoke => {
+                    self.super_invoke(instructions, constants)?;
+                    is_frame_changed = true;
+                }
+                Opcode::Closure => {
+                    self.closure(closure, instructions, constants)?;
+                    is_frame_changed = true;
+                }
                 Opcode::CloseUpvalue => self.close_upvalue()?,
                 Opcode::Ret => {
                     if self.ret()? {
                         break;
                     }
+                    is_frame_changed = true;
                 }
-                Opcode::Class => self.class()?,
+                Opcode::Class => self.class(instructions, constants)?,
                 Opcode::Inherit => self.inherit()?,
-                Opcode::Method => self.method()?,
+                Opcode::Method => self.method(instructions, constants)?,
+            }
+            if is_frame_changed {
+                closure = self.vm.frame().closure;
+                instructions = &closure.fun.chunk.instructions;
+                constants = &closure.fun.chunk.constants;
             }
         }
         Ok(())
     }
 
-    fn super_invoke(&mut self) -> Result<(), RuntimeError> {
-        let method = self.read_constant()?.as_string()?;
-        let argc = self.read_byte()?;
+    fn super_invoke(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let method = self.read_constant(instructions, constants)?.as_string()?;
+        let argc = self.read_byte(instructions)?;
 
         let superclass = self.vm.stack_pop().as_class()?;
         self.invoke_from_class(superclass, &method, argc)?;
         Ok(())
     }
 
-    fn invoke(&mut self) -> Result<(), RuntimeError> {
-        let method = self.read_constant()?.as_string()?;
-        let argc = self.read_byte()?;
+    fn invoke(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let method = self.read_constant(instructions, constants)?.as_string()?;
+        let argc = self.read_byte(instructions)?;
 
         let receiver = self.vm.stack_top(argc as usize);
         let instance = receiver
@@ -490,8 +537,12 @@ impl<'vm> Task<'vm> {
 
     // Bind a method to a class definition. At this moment, a closure object should be the top most
     // item in the stack, and a class definition object should be the second top most item.
-    fn method(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+    fn method(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let name = self.read_constant(instructions, constants)?.as_string()?;
         let closure = self.vm.stack_pop().as_closure()?;
         let class = self.vm.stack_top(0).as_class()?;
         class.borrow_mut().methods.insert(Rc::clone(&name), closure);
@@ -513,8 +564,12 @@ impl<'vm> Task<'vm> {
         }
     }
 
-    fn get_property(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+    fn get_property(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let name = self.read_constant(instructions, constants)?.as_string()?;
         let instance = self
             .vm
             .stack_top(0)
@@ -533,8 +588,12 @@ impl<'vm> Task<'vm> {
         }
     }
 
-    fn set_property(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+    fn set_property(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let name = self.read_constant(instructions, constants)?.as_string()?;
         let value = self.vm.stack_pop();
         let instance = self
             .vm
@@ -548,8 +607,12 @@ impl<'vm> Task<'vm> {
         Ok(())
     }
 
-    fn get_super(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+    fn get_super(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let name = self.read_constant(instructions, constants)?.as_string()?;
         let superclass = self.vm.stack_pop().as_class()?;
         if !self.bind_method(superclass, &name)? {
             return Err(RuntimeError::UndefinedProperty(name.to_string()));
@@ -557,8 +620,12 @@ impl<'vm> Task<'vm> {
         Ok(())
     }
 
-    fn class(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+    fn class(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let name = self.read_constant(instructions, constants)?.as_string()?;
         let (class, _) = self.vm.alloc_class(ObjClass::new(Rc::clone(&name)));
         self.vm.stack_push(Value::Object(class))?;
         Ok(())
@@ -583,9 +650,13 @@ impl<'vm> Task<'vm> {
 
     /// Get the value of the variable capture by an upvalue.
     #[allow(unsafe_code)]
-    fn get_upvalue(&mut self) -> Result<(), RuntimeError> {
-        let upvalue_slot = self.read_byte()?;
-        let upvalue = self.vm.frame().closure.upvalues[upvalue_slot as usize];
+    fn get_upvalue(
+        &mut self,
+        closure: RefClosure,
+        instructions: &[u8],
+    ) -> Result<(), RuntimeError> {
+        let upvalue_slot = self.read_byte(instructions)?;
+        let upvalue = closure.upvalues[upvalue_slot as usize];
         match *upvalue.borrow() {
             // Value is on the stack.
             ObjUpvalue::Open(stack_slot) => {
@@ -604,11 +675,14 @@ impl<'vm> Task<'vm> {
 
     /// Set the value of the variable capture by an upvalue.
     #[allow(unsafe_code)]
-    fn set_upvalue(&mut self) -> Result<(), RuntimeError> {
-        let upvalue_slot = self.read_byte()?;
+    fn set_upvalue(
+        &mut self,
+        closure: RefClosure,
+        instructions: &[u8],
+    ) -> Result<(), RuntimeError> {
+        let upvalue_slot = self.read_byte(instructions)?;
         let value = *self.vm.stack_top(0);
         let stack_slot = {
-            let closure = self.vm.frame_mut().closure;
             let mut upvalue = closure.upvalues[upvalue_slot as usize].borrow_mut();
             match upvalue.deref_mut() {
                 // Value is on the stack.
@@ -628,16 +702,21 @@ impl<'vm> Task<'vm> {
         Ok(())
     }
 
-    fn closure(&mut self) -> Result<(), RuntimeError> {
-        let fun = self.read_constant()?.as_fun()?;
+    fn closure(
+        &mut self,
+        closure: RefClosure,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let fun = self.read_constant(instructions, constants)?.as_fun()?;
         let mut upvalues = Vec::with_capacity(fun.upvalue_count as usize);
         for _ in 0..fun.upvalue_count {
-            let is_local = self.read_byte()? == 1;
-            let index = self.read_byte()? as usize;
+            let is_local = self.read_byte(instructions)? == 1;
+            let index = self.read_byte(instructions)? as usize;
             if is_local {
                 upvalues.push(self.capture_upvalue(self.vm.frame().slot + index)?);
             } else {
-                upvalues.push(self.vm.frame().closure.upvalues[index]);
+                upvalues.push(closure.upvalues[index]);
             }
         }
 
@@ -717,8 +796,8 @@ impl<'vm> Task<'vm> {
         Ok(false)
     }
 
-    fn call(&mut self) -> Result<(), RuntimeError> {
-        let argc = self.read_byte()?;
+    fn call(&mut self, instructions: &[u8]) -> Result<(), RuntimeError> {
+        let argc = self.read_byte(instructions)?;
         let v = self.vm.stack_top(argc as usize);
         self.call_value(*v, argc)?;
         Ok(())
@@ -791,8 +870,8 @@ impl<'vm> Task<'vm> {
         Ok(())
     }
 
-    fn jump(&mut self, direction: JumpDirection) -> Result<(), RuntimeError> {
-        let offset = self.read_short()?;
+    fn jump(&mut self, direction: JumpDirection, instructions: &[u8]) -> Result<(), RuntimeError> {
+        let offset = self.read_short(instructions)?;
         let frame = self.vm.frame_mut();
         match direction {
             JumpDirection::Forward => frame.ip += offset as usize,
@@ -801,8 +880,8 @@ impl<'vm> Task<'vm> {
         Ok(())
     }
 
-    fn jump_if_true(&mut self) -> Result<(), RuntimeError> {
-        let offset = self.read_short()?;
+    fn jump_if_true(&mut self, instructions: &[u8]) -> Result<(), RuntimeError> {
+        let offset = self.read_short(instructions)?;
         let val = self.vm.stack_top(0);
         if val.is_truthy() {
             self.vm.frame_mut().ip += offset as usize;
@@ -810,8 +889,8 @@ impl<'vm> Task<'vm> {
         Ok(())
     }
 
-    fn jump_if_false(&mut self) -> Result<(), RuntimeError> {
-        let offset = self.read_short()?;
+    fn jump_if_false(&mut self, instructions: &[u8]) -> Result<(), RuntimeError> {
+        let offset = self.read_short(instructions)?;
         let val = self.vm.stack_top(0);
         if val.is_falsey() {
             self.vm.frame_mut().ip += offset as usize;
@@ -821,8 +900,8 @@ impl<'vm> Task<'vm> {
 
     /// Get a local variable.
     #[allow(unsafe_code)]
-    fn get_local(&mut self) -> Result<(), RuntimeError> {
-        let slot = self.read_byte()? as usize;
+    fn get_local(&mut self, instructions: &[u8]) -> Result<(), RuntimeError> {
+        let slot = self.read_byte(instructions)? as usize;
         let frame_slot = self.vm.frame().slot;
         // SAFETY: The compiler should produce safe code that access a safe part of the stack.
         let value = unsafe { self.vm.stack.at(frame_slot + slot) };
@@ -832,8 +911,8 @@ impl<'vm> Task<'vm> {
 
     /// Set a local variable.
     #[allow(unsafe_code)]
-    fn set_local(&mut self) -> Result<(), RuntimeError> {
-        let slot = self.read_byte()? as usize;
+    fn set_local(&mut self, instructions: &[u8]) -> Result<(), RuntimeError> {
+        let slot = self.read_byte(instructions)? as usize;
         let frame_slot = self.vm.frame().slot;
         let value = *self.vm.stack_top(0);
         // SAFETY: The compiler should produce safe code that access a safe part of the stack.
@@ -843,8 +922,12 @@ impl<'vm> Task<'vm> {
     }
 
     /// Get a global variable or return a runtime error if it was not found.
-    fn get_global(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+    fn get_global(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let name = self.read_constant(instructions, constants)?.as_string()?;
         let value = self
             .vm
             .globals
@@ -855,8 +938,12 @@ impl<'vm> Task<'vm> {
     }
 
     /// Set a global variable or return a runtime error if it was not found.
-    fn set_global(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+    fn set_global(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let name = self.read_constant(instructions, constants)?.as_string()?;
         let value = self.vm.stack_top(0);
         if !self.vm.globals.contains_key(&***name) {
             return Err(RuntimeError::UndefinedVariable(name.to_string()));
@@ -866,16 +953,24 @@ impl<'vm> Task<'vm> {
     }
 
     /// Declare a variable with some initial value.
-    fn defined_global(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+    fn defined_global(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let name = self.read_constant(instructions, constants)?.as_string()?;
         let value = self.vm.stack_pop();
         self.vm.globals.insert(Rc::clone(&name), value);
         Ok(())
     }
 
     /// Read the constant id from the next byte and load the constant with the found id.
-    fn constant(&mut self) -> Result<(), RuntimeError> {
-        let constant = self.read_constant()?;
+    fn constant(
+        &mut self,
+        instructions: &[u8],
+        constants: &Stack<Value, VM_STACK_SIZE>,
+    ) -> Result<(), RuntimeError> {
+        let constant = self.read_constant(instructions, constants)?;
         self.vm.stack_push(constant)?;
         Ok(())
     }
@@ -1001,31 +1096,31 @@ struct CallFrame {
 }
 
 impl CallFrame {
-    /// Read the next byte in the stream of bytecode instructions.
-    fn read_byte(&mut self) -> Result<u8, RuntimeError> {
-        let byte = self.closure.fun.chunk.instructions[self.ip];
-        self.ip += 1;
-        Ok(byte)
-    }
+    ///// Read the next byte in the stream of bytecode instructions.
+    //fn read_byte(&mut self) -> Result<u8, RuntimeError> {
+    //    let byte = self.closure.fun.chunk.instructions[self.ip];
+    //    self.ip += 1;
+    //    Ok(byte)
+    //}
 
-    /// Read the next 2 bytes in the stream of bytecode instructions.
-    fn read_short(&mut self) -> Result<u16, RuntimeError> {
-        let hi = self.closure.fun.chunk.instructions[self.ip] as u16;
-        let lo = self.closure.fun.chunk.instructions[self.ip + 1] as u16;
-        let short = hi << 8 | lo;
-        self.ip += 2;
-        Ok(short)
-    }
+    ///// Read the next 2 bytes in the stream of bytecode instructions.
+    //fn read_short(&mut self) -> Result<u16, RuntimeError> {
+    //    let hi = self.closure.fun.chunk.instructions[self.ip] as u16;
+    //    let lo = self.closure.fun.chunk.instructions[self.ip + 1] as u16;
+    //    let short = hi << 8 | lo;
+    //    self.ip += 2;
+    //    Ok(short)
+    //}
 
-    /// Read the next byte in the stream of bytecode instructions and return the constant at the
-    /// index given by the byte.
-    #[allow(unsafe_code)]
-    fn read_constant(&mut self) -> Result<Value, RuntimeError> {
-        let constant_id = self.read_byte()? as usize;
-        // SAFETY: The compiler should produce correct byte codes.
-        let constant = unsafe { *self.closure.fun.chunk.constants.at(constant_id) };
-        Ok(constant)
-    }
+    ///// Read the next byte in the stream of bytecode instructions and return the constant at the
+    ///// index given by the byte.
+    //#[allow(unsafe_code)]
+    //fn read_constant(&mut self) -> Result<Value, RuntimeError> {
+    //    let constant_id = self.read_byte()? as usize;
+    //    // SAFETY: The compiler should produce correct byte codes.
+    //    let constant = unsafe { *self.closure.fun.chunk.constants.at(constant_id) };
+    //    Ok(constant)
+    //}
 }
 
 /// An enumeration that determine whether to jump forward or backward along the stream of

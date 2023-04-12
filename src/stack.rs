@@ -10,7 +10,7 @@ pub(crate) struct Stack<T, const N: usize> {
 
 impl<T, const N: usize> Stack<T, N> {
     pub(crate) fn push(&mut self, value: T) {
-        self.items[self.len] = MaybeUninit::new(value);
+        self.items[self.len].write(value);
         self.len += 1;
     }
 
