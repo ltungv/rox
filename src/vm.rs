@@ -198,8 +198,6 @@ impl VirtualMachine {
     }
 
     fn stack_top(&self, n: usize) -> &Value {
-        // SAFETY: The compiler should produce safe byte codes such that we never
-        // exhaust the stack.
         self.stack.top(n)
     }
 
@@ -1093,34 +1091,6 @@ struct CallFrame {
     closure: RefClosure,
     ip: usize,
     slot: usize,
-}
-
-impl CallFrame {
-    ///// Read the next byte in the stream of bytecode instructions.
-    //fn read_byte(&mut self) -> Result<u8, RuntimeError> {
-    //    let byte = self.closure.fun.chunk.instructions[self.ip];
-    //    self.ip += 1;
-    //    Ok(byte)
-    //}
-
-    ///// Read the next 2 bytes in the stream of bytecode instructions.
-    //fn read_short(&mut self) -> Result<u16, RuntimeError> {
-    //    let hi = self.closure.fun.chunk.instructions[self.ip] as u16;
-    //    let lo = self.closure.fun.chunk.instructions[self.ip + 1] as u16;
-    //    let short = hi << 8 | lo;
-    //    self.ip += 2;
-    //    Ok(short)
-    //}
-
-    ///// Read the next byte in the stream of bytecode instructions and return the constant at the
-    ///// index given by the byte.
-    //#[allow(unsafe_code)]
-    //fn read_constant(&mut self) -> Result<Value, RuntimeError> {
-    //    let constant_id = self.read_byte()? as usize;
-    //    // SAFETY: The compiler should produce correct byte codes.
-    //    let constant = unsafe { *self.closure.fun.chunk.constants.at(constant_id) };
-    //    Ok(constant)
-    //}
 }
 
 /// An enumeration that determine whether to jump forward or backward along the stream of
