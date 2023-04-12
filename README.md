@@ -38,3 +38,9 @@ A bytecode virtual machine written in Rust for the Lox programming language.
     + If no case matches and there is a default case, execute its statements.
 + [ ] `continue`/`break` statement in loop.
 
+## Potential perforamnce improvement
+
++ [x] Fixed-size stack with no check.
++ [ ] Cached the call frame and only change it when calling a function/method.
++ [ ] HashMap using the iterned string pointer addresses as its keys.
++ [ ] HashMap using the iterned string pointer addresses as its keys.
