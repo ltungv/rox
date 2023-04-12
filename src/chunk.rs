@@ -76,7 +76,6 @@ pub(crate) fn disassemble_chunk(chunk: &Chunk, name: &str) {
 }
 
 /// Display an instruction in human readable format.
-#[allow(unsafe_code)]
 #[cfg(feature = "dbg-execution")]
 pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
     let line_current = chunk.get_line(offset);
@@ -167,7 +166,6 @@ fn disassemble_simple(offset: usize, name: &'static str) -> usize {
 }
 
 /// Display a constant instruction in human-readable format.
-#[allow(unsafe_code)]
 #[cfg(feature = "dbg-execution")]
 fn disassemble_constant(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
     let constant_id = chunk.instructions[offset + 1] as usize;
@@ -200,7 +198,6 @@ fn disassemble_jump(chunk: &Chunk, offset: usize, dir: JumpDirection, name: &'st
 }
 
 /// Display a invoke instruction in human-readable format.
-#[allow(unsafe_code)]
 #[cfg(feature = "dbg-execution")]
 fn disassemble_invoke(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
     let slot = chunk.instructions[offset + 1];

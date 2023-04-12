@@ -448,7 +448,6 @@ impl<T> GcData<T> {
 impl<T> ops::Deref for GcData<T> {
     type Target = T;
 
-    #[allow(unsafe_code)]
     fn deref(&self) -> &Self::Target {
         &self.data
     }
@@ -468,7 +467,6 @@ impl<T> Gc<T> {
         }
     }
 
-    #[allow(unsafe_code)]
     pub(crate) unsafe fn release(self) -> Box<GcData<T>> {
         Box::from_raw(self.ptr.as_ptr())
     }
@@ -490,7 +488,6 @@ impl<T> Gc<T> {
 impl<T> ops::Deref for Gc<T> {
     type Target = GcData<T>;
 
-    #[allow(unsafe_code)]
     fn deref(&self) -> &Self::Target {
         unsafe { self.ptr.as_ref() }
     }

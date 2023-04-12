@@ -106,7 +106,6 @@ impl Heap {
     ///
     /// We must ensure that all reachable pointers have been marked. Otherwise, we'll deallocate
     /// objects that are in-used and leave dangling pointers.
-    #[allow(unsafe_code)]
     pub(crate) unsafe fn sweep(&mut self) {
         let mut prev_obj: Option<Object> = None;
         let mut curr_obj = self.head;
@@ -169,7 +168,6 @@ impl Heap {
     /// invalidate a reference that is in used.
     /// + Before calling this method, we must ensure that the object is removed from the linked list of
     /// heap-allocated objects.
-    #[allow(unsafe_code)]
     unsafe fn dealloc(&mut self, object: Object) {
         let size = object.mem_size();
 
@@ -220,7 +218,6 @@ impl Heap {
 }
 
 impl Drop for Heap {
-    #[allow(unsafe_code)]
     fn drop(&mut self) {
         // Safety: If the heap is drop then both the compiler and vm will no longer be in use so
         // deallocating all objects is safe.

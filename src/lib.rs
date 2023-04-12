@@ -1,6 +1,6 @@
 //! An interpreter for the Lox programming language.
 
-#![deny(rust_2018_idioms, rust_2021_compatibility, clippy::all, unsafe_code)]
+#![deny(rust_2018_idioms, rust_2021_compatibility, clippy::all)]
 #![warn(missing_docs)]
 
 mod chunk;
@@ -9,9 +9,9 @@ mod heap;
 mod object;
 mod opcode;
 mod scan;
+mod stack;
 mod value;
 mod vm;
-mod stack;
 
 pub use vm::{RuntimeError, VirtualMachine};
 

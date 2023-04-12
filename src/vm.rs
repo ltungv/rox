@@ -298,7 +298,6 @@ impl VirtualMachine {
         };
     }
 
-    #[allow(unsafe_code)]
     fn mark_sweep(&mut self) {
         self.mark_roots();
         while let Some(grey_object) = self.grey_objects.pop() {
@@ -382,7 +381,6 @@ impl<'vm> Task<'vm> {
 
     /// Read the next byte in the stream of bytecode instructions and return the constant at the
     /// index given by the byte.
-    #[allow(unsafe_code)]
     fn read_constant(
         &mut self,
         instructions: &[u8],
@@ -647,7 +645,6 @@ impl<'vm> Task<'vm> {
     }
 
     /// Get the value of the variable capture by an upvalue.
-    #[allow(unsafe_code)]
     fn get_upvalue(
         &mut self,
         closure: RefClosure,
@@ -672,7 +669,6 @@ impl<'vm> Task<'vm> {
     }
 
     /// Set the value of the variable capture by an upvalue.
-    #[allow(unsafe_code)]
     fn set_upvalue(
         &mut self,
         closure: RefClosure,
@@ -750,7 +746,6 @@ impl<'vm> Task<'vm> {
 
     // Close all upvalues whose referenced stack slot went out of scope. Here, `last` is the lowest
     // stack slot that went out of scope.
-    #[allow(unsafe_code)]
     fn close_upvalues(&mut self, last: usize) -> Result<(), RuntimeError> {
         for upvalue in &self.vm.open_upvalues {
             // Check if we reference a slot that went out of scope.
@@ -897,7 +892,6 @@ impl<'vm> Task<'vm> {
     }
 
     /// Get a local variable.
-    #[allow(unsafe_code)]
     fn get_local(&mut self, instructions: &[u8]) -> Result<(), RuntimeError> {
         let slot = self.read_byte(instructions)? as usize;
         let frame_slot = self.vm.frame().slot;
@@ -908,7 +902,6 @@ impl<'vm> Task<'vm> {
     }
 
     /// Set a local variable.
-    #[allow(unsafe_code)]
     fn set_local(&mut self, instructions: &[u8]) -> Result<(), RuntimeError> {
         let slot = self.read_byte(instructions)? as usize;
         let frame_slot = self.vm.frame().slot;

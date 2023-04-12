@@ -14,14 +14,12 @@ impl<T, const N: usize> Stack<T, N> {
         self.len += 1;
     }
 
-    #[allow(unsafe_code)]
     pub(crate) fn pop(&mut self) -> T {
         self.len -= 1;
         // SAFETY: All items at index below self.len must have been initialized
         unsafe { self.items[self.len].assume_init_read() }
     }
 
-    #[allow(unsafe_code)]
     pub(crate) fn remove(&mut self, count: usize) {
         self.len -= count;
     }
@@ -34,19 +32,16 @@ impl<T, const N: usize> Stack<T, N> {
         self.len
     }
 
-    #[allow(unsafe_code)]
     pub(crate) fn topn(&self, count: usize) -> &[T] {
         // SAFETY: All items at index below self.len must have been initialized
         unsafe { mem::transmute(&self.items[self.len - count..self.len]) }
     }
 
-    #[allow(unsafe_code)]
     pub(crate) fn top(&self, n: usize) -> &T {
         // SAFETY: All items at index below self.len must have been initialized
         unsafe { self.at(self.len - n - 1) }
     }
 
-    #[allow(unsafe_code)]
     pub(crate) fn top_mut(&mut self, n: usize) -> &mut T {
         // SAFETY: All items at index below self.len must have been initialized
         unsafe { self.at_mut(self.len - n - 1) }
@@ -55,7 +50,6 @@ impl<T, const N: usize> Stack<T, N> {
     // ## Safety
     //
     // Caller must ensure that the index points to a valid item in the stack.
-    #[allow(unsafe_code)]
     pub(crate) unsafe fn at(&self, index: usize) -> &T {
         self.items[index].assume_init_ref()
     }
@@ -63,14 +57,12 @@ impl<T, const N: usize> Stack<T, N> {
     // ## Safety
     //
     // Caller must ensure that the index points to a valid item in the stack.
-    #[allow(unsafe_code)]
     pub(crate) unsafe fn at_mut(&mut self, index: usize) -> &mut T {
         self.items[index].assume_init_mut()
     }
 }
 
 impl<T, const N: usize> Default for Stack<T, N> {
-    #[allow(unsafe_code)]
     fn default() -> Self {
         // SAFETY: Coercing an uninitialized array into an array of uninitialized should be ok.
         let items: [MaybeUninit<T>; N] = unsafe { MaybeUninit::uninit().assume_init() };
@@ -107,7 +99,6 @@ impl<'stack, T, const N: usize> StackIterator<'stack, T, N> {
 impl<'stack, T, const N: usize> Iterator for StackIterator<'stack, T, N> {
     type Item = &'stack T;
 
-    #[allow(unsafe_code)]
     fn next(&mut self) -> Option<Self::Item> {
         if self.bot >= self.top {
             None
@@ -120,7 +111,6 @@ impl<'stack, T, const N: usize> Iterator for StackIterator<'stack, T, N> {
     }
 }
 impl<'stack, T, const N: usize> DoubleEndedIterator for StackIterator<'stack, T, N> {
-    #[allow(unsafe_code)]
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.bot >= self.top {
             None
@@ -192,7 +182,6 @@ mod tests {
         s.pop();
     }
 
-    #[allow(unsafe_code)]
     #[test]
     fn test_stack_at_returns_correct_item() {
         let mut s = TestStack::default();
@@ -205,7 +194,6 @@ mod tests {
         }
     }
 
-    #[allow(unsafe_code)]
     #[test]
     fn test_stack_at_mut_modifies_correct_item() {
         let mut s = TestStack::default();
@@ -222,7 +210,6 @@ mod tests {
         }
     }
 
-    #[allow(unsafe_code)]
     #[test]
     fn test_stack_top_returns_correct_item() {
         let mut s = TestStack::default();
@@ -237,7 +224,6 @@ mod tests {
         }
     }
 
-    #[allow(unsafe_code)]
     #[test]
     fn test_stack_top_mut_modifies_correct_item() {
         let mut s = TestStack::default();
@@ -252,7 +238,6 @@ mod tests {
         }
     }
 
-    #[allow(unsafe_code)]
     #[test]
     #[should_panic]
     fn test_stack_top_panics_when_empty() {
@@ -260,7 +245,6 @@ mod tests {
         s.top(0);
     }
 
-    #[allow(unsafe_code)]
     #[test]
     #[should_panic]
     fn test_stack_top_mut_panics_when_empty() {
