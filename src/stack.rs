@@ -17,9 +17,8 @@ impl<T, const N: usize> Stack<T, N> {
     #[allow(unsafe_code)]
     pub(crate) fn pop(&mut self) -> T {
         self.len -= 1;
-        let it = mem::replace(&mut self.items[self.len], MaybeUninit::uninit());
         // SAFETY: All items at index below self.len must have been initialized
-        unsafe { it.assume_init() }
+        unsafe { self.items[self.len].assume_init_read() }
     }
 
     #[allow(unsafe_code)]
