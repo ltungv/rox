@@ -41,5 +41,5 @@ A bytecode virtual machine written in Rust for the Lox programming language.
 ## Potential performance improvement
 
 + [x] Fixed-size stack with no bounds check on access.
-+ [ ] Cached the call frame and only change it when calling a function/method.
++ [x] Cached the chunk instructions pointer.
 + [ ] HashMap using the iterned string pointer addresses as its keys.
