@@ -832,41 +832,24 @@ impl VirtualMachine {
 
     /// Read the next byte in the stream of bytecode instructions.
     fn read_byte(&mut self) -> Result<u8, RuntimeError> {
-        let frame = self.frame_mut();
-        unsafe {
-            let byte = *frame.ip;
-            frame.ip = frame.ip.add(1);
-            Ok(byte)
-        }
+        // SAFETY: The compiler should produce correct byte codes
+        // so we never read an out-of-bound index.
+        unsafe { self.frame_mut().read_byte() }
     }
 
     /// Read the next 2 bytes in the stream of bytecode instructions.
     fn read_short(&mut self) -> Result<u16, RuntimeError> {
-        let frame = self.frame_mut();
-        unsafe {
-            let hi = *frame.ip as u16;
-            let lo = *frame.ip.add(1) as u16;
-            frame.ip = frame.ip.add(2);
-            Ok(hi << 8 | lo)
-        }
+        // SAFETY: The compiler should produce correct byte codes
+        // so we never read an out-of-bound index.
+        unsafe { self.frame_mut().read_short() }
     }
 
     /// Read the next byte in the stream of bytecode instructions and return the constant at the
     /// index given by the byte.
     fn read_constant(&mut self) -> Result<Value, RuntimeError> {
-        let frame = self.frame_mut();
-        // SAFETY: The compiler should produce correct byte codes.
-        unsafe {
-            let constant_id = *frame.ip;
-            frame.ip = frame.ip.add(1);
-            Ok(*self
-                .frame()
-                .closure
-                .fun
-                .chunk
-                .constants
-                .at(constant_id as usize))
-        }
+        // SAFETY: The compiler should produce correct byte codes
+        // so we never read an out-of-bound index.
+        unsafe { self.frame_mut().read_constant() }
     }
 
     fn frame(&self) -> &CallFrame {
@@ -1015,6 +998,31 @@ struct CallFrame {
     closure: RefClosure,
     ip: *const u8,
     slot: usize,
+}
+
+impl CallFrame {
+    /// Read the next byte in the stream of bytecode instructions.
+    unsafe fn read_byte(&mut self) -> Result<u8, RuntimeError> {
+        let byte = *self.ip;
+        self.ip = self.ip.add(1);
+        Ok(byte)
+    }
+
+    /// Read the next 2 bytes in the stream of bytecode instructions.
+    unsafe fn read_short(&mut self) -> Result<u16, RuntimeError> {
+        let hi = *self.ip as u16;
+        let lo = *self.ip.add(1) as u16;
+        self.ip = self.ip.add(2);
+        Ok(hi << 8 | lo)
+    }
+
+    /// Read the next byte in the stream of bytecode instructions and return the constant at the
+    /// index given by the byte.
+    unsafe fn read_constant(&mut self) -> Result<Value, RuntimeError> {
+        let constant_id = *self.ip;
+        self.ip = self.ip.add(1);
+        Ok(*self.closure.fun.chunk.constants.at(constant_id as usize))
+    }
 }
 
 /// An enumeration that determine whether to jump forward or backward along the stream of
