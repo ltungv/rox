@@ -473,7 +473,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             let local = compiler
                 .locals
                 .last_mut()
-                .expect("A local variable should have been declared.");
+                .expect("Expect local variable.");
             local.depth = compiler.scope_depth;
         }
     }

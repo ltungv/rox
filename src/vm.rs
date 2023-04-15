@@ -93,7 +93,7 @@ pub enum RuntimeError {
 pub struct VirtualMachine {
     stack: Stack<Value, VM_STACK_SIZE>,
     frames: Stack<CallFrame, VM_FRAMES_MAX>,
-    current_frame: Option<NonNull<CallFrame>>,
+    current_frame: NonNull<CallFrame>,
     open_upvalues: Vec<RefUpvalue>,
     globals: FxHashMap<Rc<str>, Value>,
     grey_objects: Vec<Object>,
@@ -112,14 +112,14 @@ impl VirtualMachine {
         let mut vm = Self {
             stack: Stack::default(),
             frames: Stack::default(),
-            current_frame: None,
+            current_frame: NonNull::dangling(),
             open_upvalues: Vec::new(),
             globals: FxHashMap::default(),
             grey_objects: Vec::new(),
             heap: Heap::default(),
         };
         vm.define_native("clock", 0, clock_native)
-            .expect("Native function must be defined.");
+            .expect("Can't define native function.");
         vm
     }
 }
@@ -853,11 +853,11 @@ impl VirtualMachine {
     }
 
     fn frame(&self) -> &CallFrame {
-        unsafe { self.current_frame.expect("Expect a frame.").as_ref() }
+        unsafe { self.current_frame.as_ref() }
     }
 
     fn frame_mut(&mut self) -> &mut CallFrame {
-        unsafe { self.current_frame.expect("Expect a frame.").as_mut() }
+        unsafe { self.current_frame.as_mut() }
     }
 
     fn frames_push(&mut self, frame: CallFrame) -> Result<usize, RuntimeError> {
@@ -866,14 +866,16 @@ impl VirtualMachine {
             return Err(RuntimeError::StackOverflow);
         }
         self.frames.push(frame);
-        self.current_frame = NonNull::new(self.frames.top_mut(0) as *mut CallFrame);
+        self.current_frame =
+            unsafe { NonNull::new_unchecked(self.frames.top_mut(0) as *mut CallFrame) };
         Ok(frame_count)
     }
 
     fn frames_pop(&mut self) -> CallFrame {
         let ret = self.frames.pop();
         if self.frames.len() > 0 {
-            self.current_frame = NonNull::new(self.frames.top_mut(0) as *mut CallFrame);
+            self.current_frame =
+                unsafe { NonNull::new_unchecked(self.frames.top_mut(0) as *mut CallFrame) };
         }
         ret
     }
