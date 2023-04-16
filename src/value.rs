@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, fmt, ops};
 
-use crate::object::{Gc, Object, RefClass, RefClosure, RefFun, RefInstance, RefStringV2};
+use crate::object::{Gc, Object, RefClass, RefClosure, RefFun, RefInstance, RefString};
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ValueError {
@@ -29,8 +29,8 @@ pub(crate) enum Value {
 
 impl Value {
     /// Cast the object as a string.
-    pub(crate) fn as_string_v2(&self) -> Result<RefStringV2, ValueError> {
-        if let Self::Object(Object::StringV2(s)) = self {
+    pub(crate) fn as_string(&self) -> Result<RefString, ValueError> {
+        if let Self::Object(Object::String(s)) = self {
             Ok(*s)
         } else {
             Err(ValueError::InvalidCast)
@@ -124,7 +124,7 @@ impl PartialEq for Value {
             (Self::Nil, Self::Nil) => true,
             (Self::Bool(v1), Self::Bool(v2)) => v1 == v2,
             (Self::Number(v1), Self::Number(v2)) => v1.eq(v2),
-            (Self::Object(Object::StringV2(s1)), Self::Object(Object::StringV2(s2))) => {
+            (Self::Object(Object::String(s1)), Self::Object(Object::String(s2))) => {
                 Gc::ptr_eq(s1, s2)
             }
             (Self::Object(Object::Upvalue(v1)), Self::Object(Object::Upvalue(v2))) => {

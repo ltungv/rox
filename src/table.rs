@@ -1,6 +1,6 @@
 use std::{alloc, mem, ptr::NonNull};
 
-use crate::object::{Gc, RefStringV2};
+use crate::object::{Gc, RefString};
 
 #[derive(Debug)]
 pub(crate) struct Table<V> {
@@ -11,7 +11,7 @@ pub(crate) struct Table<V> {
 }
 
 impl<V> Table<V> {
-    pub(crate) fn del(&mut self, key: RefStringV2) -> Option<V> {
+    pub(crate) fn del(&mut self, key: RefString) -> Option<V> {
         if self.occupants == 0 {
             return None;
         }
@@ -26,7 +26,7 @@ impl<V> Table<V> {
         }
     }
 
-    pub(crate) fn find(&self, s: &str, hash: u32) -> Option<RefStringV2> {
+    pub(crate) fn find(&self, s: &str, hash: u32) -> Option<RefString> {
         if self.occupants == 0 {
             return None;
         }
@@ -57,7 +57,7 @@ impl<V> Table<V> {
 
     /// Find the entry associated with the given key. If the 2 different keys have the same hash,
     /// linear probing is used to find the correct entry.
-    fn find_entry(&self, key: RefStringV2) -> *mut Entry<V> {
+    fn find_entry(&self, key: RefString) -> *mut Entry<V> {
         let mut tombstone = None;
         let mut index = key.hash as usize & (self.capacity - 1);
         loop {
@@ -94,7 +94,7 @@ impl<V> Table<V> {
 impl<V: Copy> Table<V> {
     /// Set the value associated with the given key.
     /// If the key is already present, the previous value is returned.
-    pub(crate) fn set(&mut self, key: RefStringV2, val: V) -> Option<V> {
+    pub(crate) fn set(&mut self, key: RefString, val: V) -> Option<V> {
         if self.occupants + self.tombstones >= self.capacity * 3 / 4 {
             let cap = self.capacity * 2;
             self.resize(cap.max(8));
@@ -115,7 +115,7 @@ impl<V: Copy> Table<V> {
         }
     }
 
-    pub(crate) fn get(&self, key: RefStringV2) -> Option<V> {
+    pub(crate) fn get(&self, key: RefString) -> Option<V> {
         if self.occupants == 0 {
             return None;
         }
@@ -193,7 +193,7 @@ enum Entry<V> {
 
 #[derive(Debug)]
 struct EntryInner<V> {
-    key: RefStringV2,
+    key: RefString,
     val: V,
 }
 
@@ -203,7 +203,7 @@ pub struct TableIter<V> {
 }
 
 impl<V: Copy> Iterator for TableIter<V> {
-    type Item = (RefStringV2, V);
+    type Item = (RefString, V);
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.ptr as *const Entry<V> != self.end {

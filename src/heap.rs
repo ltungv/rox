@@ -1,5 +1,5 @@
 use crate::{
-    object::{Gc, GcData, ObjString, Object, RefStringV2},
+    object::{Gc, GcData, ObjString, Object, RefString},
     table::Table,
     value::Value,
 };
@@ -67,14 +67,14 @@ impl Heap {
     /// Interned a string and returned a reference counted pointer to it. If the given string has
     /// been interned, an existing `Rc<str>` is cloned and returned. Otherwise, we turn the given
     /// string into a new `Rc<str>` and add it to our collection of unique strings.
-    pub(crate) fn intern(&mut self, data: String) -> RefStringV2 {
+    pub(crate) fn intern(&mut self, data: String) -> RefString {
         let hash = ObjString::hash(&data);
         match self.strings.find(&data, hash) {
             // Clone the reference counted pointer, increasing its strong count.
             Some(s) => s,
             None => {
                 let obj_string = ObjString { data, hash };
-                let (_, s) = self.alloc(obj_string, Object::StringV2);
+                let (_, s) = self.alloc(obj_string, Object::String);
                 self.strings.set(s, Value::Nil);
                 #[cfg(feature = "dbg-heap")]
                 println!(
@@ -157,7 +157,7 @@ impl Heap {
         println!("0x{:x} free {object} ({size} bytes)", object.addr());
 
         match object {
-            Object::StringV2(s) => {
+            Object::String(s) => {
                 s.release();
             }
             Object::Upvalue(v) => {

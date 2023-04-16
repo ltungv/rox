@@ -422,7 +422,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn identifier_constant(&mut self, name: Token<'_>) -> u8 {
         let s = String::from(name.lexeme.trim_matches('"'));
         let s = self.heap.intern(s);
-        let value = Value::Object(Object::StringV2(s));
+        let value = Value::Object(Object::String(s));
         self.make_constant(value)
     }
 
@@ -1121,7 +1121,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn string(&mut self) {
         let s = String::from(self.token_prev.lexeme.trim_matches('"'));
         let s = self.heap.intern(s);
-        let value = Value::Object(Object::StringV2(s));
+        let value = Value::Object(Object::String(s));
         self.emit_constant(value);
     }
 

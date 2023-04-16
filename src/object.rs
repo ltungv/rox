@@ -10,7 +10,7 @@ use std::{
 use crate::{chunk::Chunk, table::Table, value::Value};
 
 /// A type alias for a heap-allocated string.
-pub type RefStringV2 = Gc<ObjString>;
+pub type RefString = Gc<ObjString>;
 
 /// A type alias for a heap-allocated upvalue.
 pub(crate) type RefUpvalue = Gc<RefCell<ObjUpvalue>>;
@@ -44,7 +44,7 @@ pub enum ObjectError {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Object {
     /// A string object
-    StringV2(RefStringV2),
+    String(RefString),
     /// An upvalue object
     Upvalue(RefUpvalue),
     /// A closure object
@@ -65,7 +65,7 @@ impl Object {
     /// Mark the current object reference and put it in `grey_objects` if its has not been marked.
     pub(crate) fn mark(&self, grey_objects: &mut Vec<Object>) {
         let marked = match self {
-            Self::StringV2(s) => s.mark(),
+            Self::String(s) => s.mark(),
             Self::Upvalue(v) => v.mark(),
             Self::Closure(c) => c.mark(),
             Self::Fun(f) => f.mark(),
@@ -82,7 +82,7 @@ impl Object {
     /// Unmark the object.
     pub(crate) fn unmark(&self) {
         match self {
-            Self::StringV2(s) => s.unmark(),
+            Self::String(s) => s.unmark(),
             Self::Upvalue(v) => v.unmark(),
             Self::Closure(c) => c.unmark(),
             Self::Fun(f) => f.unmark(),
@@ -96,7 +96,7 @@ impl Object {
     /// Return whether the object is marked.
     pub(crate) fn is_marked(&self) -> bool {
         match self {
-            Self::StringV2(s) => s.is_marked(),
+            Self::String(s) => s.is_marked(),
             Self::Upvalue(v) => v.is_marked(),
             Self::Closure(c) => c.is_marked(),
             Self::Fun(f) => f.is_marked(),
@@ -117,14 +117,14 @@ impl Object {
             Object::Class(class) => class.borrow().mark_references(grey_objects),
             Object::Instance(instance) => instance.borrow().mark_references(grey_objects),
             Object::BoundMethod(method) => method.mark_references(grey_objects),
-            Object::StringV2(_) | Object::NativeFun(_) => {}
+            Object::String(_) | Object::NativeFun(_) => {}
         }
     }
 
     /// Get the next object reference in the linked list.
     pub(crate) fn get_next(&self) -> Option<Self> {
         match self {
-            Self::StringV2(s) => s.get_next(),
+            Self::String(s) => s.get_next(),
             Self::Upvalue(v) => v.get_next(),
             Self::Closure(c) => c.get_next(),
             Self::Fun(f) => f.get_next(),
@@ -138,7 +138,7 @@ impl Object {
     /// Set the next object reference in the linked list.
     pub(crate) fn set_next(&self, next: Option<Object>) {
         match self {
-            Self::StringV2(s) => s.set_next(next),
+            Self::String(s) => s.set_next(next),
             Self::Upvalue(v) => v.set_next(next),
             Self::Closure(c) => c.set_next(next),
             Self::Fun(f) => f.set_next(next),
@@ -151,7 +151,7 @@ impl Object {
 
     pub(crate) fn mem_size(&self) -> usize {
         match self {
-            Object::StringV2(s) => s.mem_size(),
+            Object::String(s) => s.mem_size(),
             Object::Upvalue(v) => v.mem_size(),
             Object::Closure(c) => c.mem_size(),
             Object::Fun(f) => f.mem_size(),
@@ -165,7 +165,7 @@ impl Object {
     #[cfg(feature = "dbg-heap")]
     pub(crate) fn addr(&self) -> usize {
         match self {
-            Self::StringV2(s) => s.as_ptr() as usize,
+            Self::String(s) => s.as_ptr() as usize,
             Self::Upvalue(v) => v.as_ptr() as usize,
             Self::Closure(c) => c.as_ptr() as usize,
             Self::Fun(f) => f.as_ptr() as usize,
@@ -180,7 +180,7 @@ impl Object {
 impl fmt::Display for Object {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Object::StringV2(s) => write!(f, "{}", ***s),
+            Object::String(s) => write!(f, "{}", ***s),
             Object::Upvalue(v) => write!(f, "{}", (***v).borrow()),
             Object::Closure(c) => write!(f, "{}", ***c),
             Object::Fun(fun) => write!(f, "{}", ***fun),
@@ -283,7 +283,7 @@ impl fmt::Display for ObjUpvalue {
 #[derive(Debug)]
 pub(crate) struct ObjFun {
     /// The name of the function
-    pub(crate) name: Option<RefStringV2>,
+    pub(crate) name: Option<RefString>,
     /// Number of parameters the function has
     pub(crate) arity: u8,
     /// Number of upvalues captured by the function
@@ -294,7 +294,7 @@ pub(crate) struct ObjFun {
 
 impl ObjFun {
     /// Create a new function object given its name.
-    pub(crate) fn new(name: Option<RefStringV2>) -> Self {
+    pub(crate) fn new(name: Option<RefString>) -> Self {
         Self {
             name,
             arity: 0,
@@ -307,7 +307,7 @@ impl ObjFun {
     pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
         if let Some(name) = self.name {
             if name.mark() {
-                grey_objects.push(Object::StringV2(name));
+                grey_objects.push(Object::String(name));
             }
         }
         for constant in &self.chunk.constants {
@@ -351,13 +351,13 @@ impl fmt::Debug for ObjNativeFun {
 #[derive(Debug)]
 pub(crate) struct ObjClass {
     /// The name of the class.
-    pub(crate) name: RefStringV2,
+    pub(crate) name: RefString,
     /// A the methods defined in the class.
     pub(crate) methods: Table<RefClosure>,
 }
 
 impl ObjClass {
-    pub(crate) fn new(name: RefStringV2) -> Self {
+    pub(crate) fn new(name: RefString) -> Self {
         Self {
             name,
             methods: Table::default(),
@@ -367,11 +367,11 @@ impl ObjClass {
     /// Mark all object references that can be directly access by the current object.
     pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
         if self.name.mark() {
-            grey_objects.push(Object::StringV2(self.name));
+            grey_objects.push(Object::String(self.name));
         }
         for (k, v) in self.methods.iter() {
             if k.mark() {
-                grey_objects.push(Object::StringV2(k));
+                grey_objects.push(Object::String(k));
             }
             if v.mark() {
                 grey_objects.push(Object::Closure(v));
@@ -409,7 +409,7 @@ impl ObjInstance {
         }
         for (k, v) in self.fields.iter() {
             if k.mark() {
-                grey_objects.push(Object::StringV2(k));
+                grey_objects.push(Object::String(k));
             }
             if let Value::Object(obj) = v {
                 obj.mark(grey_objects);
