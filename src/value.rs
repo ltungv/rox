@@ -1,6 +1,6 @@
-use std::{cmp::Ordering, fmt, ops, rc::Rc};
+use std::{cmp::Ordering, fmt, ops};
 
-use crate::object::{Gc, Object, RefClass, RefClosure, RefFun, RefInstance, RefString};
+use crate::object::{Gc, Object, RefClass, RefClosure, RefFun, RefInstance, RefStringV2};
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ValueError {
@@ -28,16 +28,16 @@ pub(crate) enum Value {
 }
 
 impl Value {
-    /// Case the object as a string.
-    pub(crate) fn as_string(&self) -> Result<RefString, ValueError> {
-        if let Self::Object(Object::String(s)) = self {
+    /// Cast the object as a string.
+    pub(crate) fn as_string_v2(&self) -> Result<RefStringV2, ValueError> {
+        if let Self::Object(Object::StringV2(s)) = self {
             Ok(*s)
         } else {
             Err(ValueError::InvalidCast)
         }
     }
 
-    /// Case the object as a closure.
+    /// Cast the object as a closure.
     pub(crate) fn as_closure(&self) -> Result<RefClosure, ValueError> {
         if let Self::Object(Object::Closure(c)) = self {
             Ok(*c)
@@ -46,7 +46,7 @@ impl Value {
         }
     }
 
-    /// Case the object as a fun.
+    /// Cast the object as a fun.
     pub(crate) fn as_fun(&self) -> Result<RefFun, ValueError> {
         if let Self::Object(Object::Fun(f)) = self {
             Ok(*f)
@@ -55,7 +55,7 @@ impl Value {
         }
     }
 
-    /// Case the object as a class.
+    /// Cast the object as a class.
     pub(crate) fn as_class(&self) -> Result<RefClass, ValueError> {
         if let Self::Object(Object::Class(c)) = self {
             Ok(*c)
@@ -64,7 +64,7 @@ impl Value {
         }
     }
 
-    /// Case the object as an instance.
+    /// Cast the object as an instance.
     pub(crate) fn as_instance(&self) -> Result<RefInstance, ValueError> {
         if let Self::Object(Object::Instance(i)) = self {
             Ok(*i)
@@ -124,8 +124,8 @@ impl PartialEq for Value {
             (Self::Nil, Self::Nil) => true,
             (Self::Bool(v1), Self::Bool(v2)) => v1 == v2,
             (Self::Number(v1), Self::Number(v2)) => v1.eq(v2),
-            (Self::Object(Object::String(s1)), Self::Object(Object::String(s2))) => {
-                Rc::ptr_eq(s1, s2)
+            (Self::Object(Object::StringV2(s1)), Self::Object(Object::StringV2(s2))) => {
+                Gc::ptr_eq(s1, s2)
             }
             (Self::Object(Object::Upvalue(v1)), Self::Object(Object::Upvalue(v2))) => {
                 Gc::ptr_eq(v1, v2)

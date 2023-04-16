@@ -122,7 +122,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         #[cfg(feature = "dbg-execution")]
         match &compiler.fun.name {
             None => disassemble_chunk(&compiler.fun.chunk, "code"),
-            Some(s) => disassemble_chunk(&compiler.fun.chunk, s),
+            Some(s) => disassemble_chunk(&compiler.fun.chunk, &s.data),
         };
 
         compiler
@@ -422,8 +422,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn identifier_constant(&mut self, name: Token<'_>) -> u8 {
         let s = String::from(name.lexeme.trim_matches('"'));
         let s = self.heap.intern(s);
-        let (object, _) = self.heap.alloc(s, Object::String);
-        let value = Value::Object(object);
+        let value = Value::Object(Object::StringV2(s));
         self.make_constant(value)
     }
 
@@ -470,10 +469,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let compiler = self.compiler_mut(0);
         // Do nothing if we are in the global scope.
         if compiler.scope_depth > 0 {
-            let local = compiler
-                .locals
-                .last_mut()
-                .expect("Expect local variable.");
+            let local = compiler.locals.last_mut().expect("Expect local variable.");
             local.depth = compiler.scope_depth;
         }
     }
@@ -1125,8 +1121,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn string(&mut self) {
         let s = String::from(self.token_prev.lexeme.trim_matches('"'));
         let s = self.heap.intern(s);
-        let (object, _) = self.heap.alloc(s, Object::String);
-        let value = Value::Object(object);
+        let value = Value::Object(Object::StringV2(s));
         self.emit_constant(value);
     }
 

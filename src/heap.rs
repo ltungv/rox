@@ -1,8 +1,8 @@
-use std::rc::Rc;
-
-use rustc_hash::FxHashMap;
-
-use crate::object::{Gc, GcData, Object};
+use crate::{
+    object::{Gc, GcData, ObjString, Object, RefStringV2},
+    table::Table,
+    value::Value,
+};
 
 #[cfg(feature = "dbg-heap")]
 use std::mem;
@@ -27,13 +27,7 @@ pub(crate) struct Heap {
     alloc_bytes: usize,
     gc_next_threshold: usize,
     gc_growth_factor: usize,
-
-    // We save space and speed up string comparison by interning them. We intern string by storing
-    // all unique strings in a vector, and use a hash map to store mappings between a string and
-    // its index.
-    intern_str: Vec<Rc<str>>,
-    intern_ids: FxHashMap<Rc<str>, usize>,
-
+    strings: Table<Value>,
     // The head of the singly linked list of heap-allocated objects.
     head: Option<Object>,
 }
@@ -44,8 +38,7 @@ impl Default for Heap {
             alloc_bytes: 0,
             gc_next_threshold: GC_NEXT_THRESHOLD,
             gc_growth_factor: GC_GROWTH_FACTOR,
-            intern_str: Vec::new(),
-            intern_ids: FxHashMap::default(),
+            strings: Table::default(),
             head: None,
         }
     }
@@ -74,26 +67,22 @@ impl Heap {
     /// Interned a string and returned a reference counted pointer to it. If the given string has
     /// been interned, an existing `Rc<str>` is cloned and returned. Otherwise, we turn the given
     /// string into a new `Rc<str>` and add it to our collection of unique strings.
-    pub(crate) fn intern(&mut self, s: String) -> Rc<str> {
-        match self.intern_ids.get(s.as_str()) {
+    pub(crate) fn intern(&mut self, data: String) -> RefStringV2 {
+        let hash = ObjString::hash(&data);
+        match self.strings.find(&data, hash) {
             // Clone the reference counted pointer, increasing its strong count.
-            Some(id) => Rc::clone(&self.intern_str[*id]),
+            Some(s) => s,
             None => {
-                let s = Rc::from(s);
-                let intern_id = self.intern_str.len();
-                // Use a `Vec` so we can have an index for each string.
-                self.intern_str.push(Rc::clone(&s));
-                // Use a hash map so we can quickly check for uniqueness and find the index of
-                // some interned string.
-                self.intern_ids.insert(Rc::clone(&s), intern_id);
-
+                let obj_string = ObjString { data, hash };
+                let (_, s) = self.alloc(obj_string, Object::StringV2);
+                self.strings.set(s, Value::Nil);
                 #[cfg(feature = "dbg-heap")]
                 println!(
-                    "{:p} alloc '{s}' ({} bytes)",
+                    "{:p} alloc '{}' ({} bytes)",
                     s.as_ptr(),
+                    s.data,
                     mem::size_of_val(&*s)
                 );
-
                 s
             }
         }
@@ -110,6 +99,12 @@ impl Heap {
         let mut prev_obj: Option<Object> = None;
         let mut curr_obj = self.head;
 
+        for (k, _) in self.strings.iter() {
+            if !k.is_marked() {
+                self.strings.del(k);
+            }
+        }
+
         while let Some(curr_ref) = curr_obj {
             let next = curr_ref.get_next();
             if curr_ref.is_marked() {
@@ -125,19 +120,6 @@ impl Heap {
                 }
                 self.dealloc(curr_ref);
             }
-        }
-
-        #[cfg(feature = "dbg-heap")]
-        self.trace_dangling_strings();
-
-        // The minimum number strong count should be 2 (1 for the vec and 1 for the hash map).
-        // Thus, any string that has `Rc::strong_count == 2` is no longer referenced and we can
-        // remove it.
-        self.intern_str.retain(|s| Rc::strong_count(s) > 2);
-        self.intern_ids.retain(|k, _| Rc::strong_count(k) > 2);
-        // Update the interned index.
-        for (i, s) in self.intern_str.iter().enumerate() {
-            self.intern_ids.insert(Rc::clone(s), i);
         }
 
         self.gc_next_threshold = self.alloc_bytes * self.gc_growth_factor;
@@ -175,7 +157,7 @@ impl Heap {
         println!("0x{:x} free {object} ({size} bytes)", object.addr());
 
         match object {
-            Object::String(s) => {
+            Object::StringV2(s) => {
                 s.release();
             }
             Object::Upvalue(v) => {
@@ -202,19 +184,6 @@ impl Heap {
         };
         self.alloc_bytes -= size;
     }
-
-    #[cfg(feature = "dbg-heap")]
-    fn trace_dangling_strings(&self) {
-        for s in &self.intern_str {
-            if Rc::strong_count(s) <= 2 {
-                println!(
-                    "{:p} free '{s}' ({} bytes)",
-                    s.as_ptr(),
-                    mem::size_of_val(&**s)
-                )
-            }
-        }
-    }
 }
 
 impl Drop for Heap {
@@ -224,9 +193,6 @@ impl Drop for Heap {
         for object in self.into_iter() {
             unsafe { self.dealloc(object) };
         }
-
-        #[cfg(feature = "dbg-heap")]
-        self.trace_dangling_strings();
 
         debug_assert_eq!(0, self.alloc_bytes);
     }

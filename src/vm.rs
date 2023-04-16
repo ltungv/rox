@@ -4,10 +4,7 @@ use std::{
     cell::RefCell,
     ops::{Add, Deref, DerefMut, Div, Mul, Neg, Not, Sub},
     ptr::NonNull,
-    rc::Rc,
 };
-
-use rustc_hash::FxHashMap;
 
 use crate::{
     compile::Parser,
@@ -15,10 +12,11 @@ use crate::{
     object::{
         ObjBoundMethod, ObjClass, ObjClosure, ObjFun, ObjInstance, ObjNativeFun, ObjUpvalue,
         Object, ObjectError, RefBoundMethod, RefClass, RefClosure, RefFun, RefInstance,
-        RefNativeFun, RefString, RefUpvalue,
+        RefNativeFun, RefStringV2, RefUpvalue,
     },
     opcode::Opcode,
     stack::Stack,
+    table::Table,
     value::{Value, ValueError},
     InterpretError,
 };
@@ -95,9 +93,10 @@ pub struct VirtualMachine {
     frames: Stack<CallFrame, VM_FRAMES_MAX>,
     current_frame: NonNull<CallFrame>,
     open_upvalues: Vec<RefUpvalue>,
-    globals: FxHashMap<Rc<str>, Value>,
+    globals: Table<Value>,
     grey_objects: Vec<Object>,
     heap: Heap,
+    str_init: RefStringV2,
 }
 
 impl Default for VirtualMachine {
@@ -109,14 +108,17 @@ impl Default for VirtualMachine {
 impl VirtualMachine {
     /// Create a new virtual machine that prints to the given output.
     pub fn new() -> Self {
+        let mut heap = Heap::default();
+        let str_init = heap.intern(String::from("init"));
         let mut vm = Self {
             stack: Stack::default(),
             frames: Stack::default(),
             current_frame: NonNull::dangling(),
             open_upvalues: Vec::new(),
-            globals: FxHashMap::default(),
+            globals: Table::default(),
             grey_objects: Vec::new(),
-            heap: Heap::default(),
+            heap,
+            str_init,
         };
         vm.define_native("clock", 0, clock_native)
             .expect("Can't define native function.");
@@ -191,7 +193,7 @@ impl VirtualMachine {
                 Opcode::SetLocal => self.set_local()?,
                 Opcode::GetGlobal => self.get_global()?,
                 Opcode::SetGlobal => self.set_global()?,
-                Opcode::DefineGlobal => self.defined_global()?,
+                Opcode::DefineGlobal => self.define_global()?,
                 Opcode::GetUpvalue => self.get_upvalue()?,
                 Opcode::SetUpvalue => self.set_upvalue()?,
                 Opcode::GetProperty => self.get_property()?,
@@ -233,16 +235,16 @@ impl VirtualMachine {
     }
 
     fn super_invoke(&mut self) -> Result<(), RuntimeError> {
-        let method = self.read_constant()?.as_string()?;
+        let method = self.read_constant()?.as_string_v2()?;
         let argc = self.read_byte()?;
 
         let superclass = self.stack_pop().as_class()?;
-        self.invoke_from_class(superclass, &method, argc)?;
+        self.invoke_from_class(superclass, method, argc)?;
         Ok(())
     }
 
     fn invoke(&mut self) -> Result<(), RuntimeError> {
-        let method = self.read_constant()?.as_string()?;
+        let method = self.read_constant()?.as_string_v2()?;
         let argc = self.read_byte()?;
 
         let receiver = self.stack_top(argc as usize);
@@ -250,11 +252,11 @@ impl VirtualMachine {
             .as_instance()
             .map_err(|_| RuntimeError::InvalidMethodInvocation)?;
 
-        if let Some(field) = instance.borrow().fields.get(&***method) {
-            *self.stack_top_mut(argc as usize) = *field;
-            self.call_value(*field, argc)?;
+        if let Some(field) = instance.borrow().fields.get(method) {
+            *self.stack_top_mut(argc as usize) = field;
+            self.call_value(field, argc)?;
         } else {
-            self.invoke_from_class(instance.borrow().class, &method, argc)?;
+            self.invoke_from_class(instance.borrow().class, method, argc)?;
         }
 
         Ok(())
@@ -263,14 +265,13 @@ impl VirtualMachine {
     fn invoke_from_class(
         &mut self,
         class: RefClass,
-        name: &str,
+        name: RefStringV2,
         argc: u8,
     ) -> Result<(), RuntimeError> {
         let method = class
             .borrow()
             .methods
             .get(name)
-            .copied()
             .ok_or_else(|| RuntimeError::UndefinedProperty(name.to_string()))?;
         self.call_closure(method, argc)?;
         Ok(())
@@ -279,19 +280,19 @@ impl VirtualMachine {
     // Bind a method to a class definition. At this moment, a closure object should be the top most
     // item in the stack, and a class definition object should be the second top most item.
     fn method(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant()?.as_string_v2()?;
         let closure = self.stack_pop().as_closure()?;
         let class = self.stack_top(0).as_class()?;
-        class.borrow_mut().methods.insert(Rc::clone(&name), closure);
+        class.borrow_mut().methods.set(name, closure);
         Ok(())
     }
 
-    fn bind_method(&mut self, class: RefClass, name: &str) -> Result<bool, RuntimeError> {
+    fn bind_method(&mut self, class: RefClass, name: RefStringV2) -> Result<bool, RuntimeError> {
         match class.borrow().methods.get(name) {
             Some(method) => {
                 let (bound, _) = self.alloc_bound_method(ObjBoundMethod {
                     receiver: *self.stack_top(0),
-                    method: *method,
+                    method,
                 });
                 self.stack_pop();
                 self.stack_push(Value::Object(bound))?;
@@ -302,18 +303,18 @@ impl VirtualMachine {
     }
 
     fn get_property(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant()?.as_string_v2()?;
         let instance = self
             .stack_top(0)
             .as_instance()
             .map_err(|_| RuntimeError::ObjectHasNoProperty)?;
 
         let instance = instance.borrow();
-        if let Some(value) = instance.fields.get(&***name) {
+        if let Some(value) = instance.fields.get(name) {
             self.stack_pop();
-            self.stack_push(*value)?;
+            self.stack_push(value)?;
             Ok(())
-        } else if self.bind_method(instance.class, &name)? {
+        } else if self.bind_method(instance.class, name)? {
             Ok(())
         } else {
             Err(RuntimeError::UndefinedProperty(name.to_string()))
@@ -321,31 +322,31 @@ impl VirtualMachine {
     }
 
     fn set_property(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant()?.as_string_v2()?;
         let value = self.stack_pop();
         let instance = self
             .stack_top(0)
             .as_instance()
             .map_err(|_| RuntimeError::ObjectHasNoField)?;
 
-        instance.borrow_mut().fields.insert(Rc::clone(&name), value);
+        instance.borrow_mut().fields.set(name, value);
         self.stack_pop();
         self.stack_push(value)?;
         Ok(())
     }
 
     fn get_super(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant()?.as_string_v2()?;
         let superclass = self.stack_pop().as_class()?;
-        if !self.bind_method(superclass, &name)? {
+        if !self.bind_method(superclass, name)? {
             return Err(RuntimeError::UndefinedProperty(name.to_string()));
         }
         Ok(())
     }
 
     fn class(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
-        let (class, _) = self.alloc_class(ObjClass::new(Rc::clone(&name)));
+        let name = self.read_constant()?.as_string_v2()?;
+        let (class, _) = self.alloc_class(ObjClass::new(name));
         self.stack_push(Value::Object(class))?;
         Ok(())
     }
@@ -356,11 +357,8 @@ impl VirtualMachine {
             .as_class()
             .map_err(|_| RuntimeError::InvalidSuperclass)?;
         let subclass = self.stack_top(0).as_class()?;
-        for (method_name, method) in &superclass.borrow().methods {
-            subclass
-                .borrow_mut()
-                .methods
-                .insert(Rc::clone(method_name), *method);
+        for (method_name, method) in superclass.borrow().methods.iter() {
+            subclass.borrow_mut().methods.set(method_name, method);
         }
         self.stack_pop();
         Ok(())
@@ -557,8 +555,8 @@ impl VirtualMachine {
         let (instance, _) = self.alloc_instance(ObjInstance::new(callee));
         *self.stack_top_mut(argc.into()) = Value::Object(instance);
         // Call the 'init' method if there's one
-        if let Some(init) = callee.borrow().methods.get("init") {
-            self.call_closure(*init, argc)?;
+        if let Some(init) = callee.borrow().methods.get(self.str_init) {
+            self.call_closure(init, argc)?;
         } else if argc != 0 {
             return Err(RuntimeError::InvalidArgumentsCount { arity: 0, argc });
         }
@@ -626,31 +624,31 @@ impl VirtualMachine {
 
     /// Get a global variable or return a runtime error if it was not found.
     fn get_global(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant()?.as_string_v2()?;
         let value = self
             .globals
-            .get(&***name)
+            .get(name)
             .ok_or_else(|| RuntimeError::UndefinedVariable(name.to_string()))?;
-        self.stack_push(*value)?;
+        self.stack_push(value)?;
         Ok(())
     }
 
     /// Set a global variable or return a runtime error if it was not found.
     fn set_global(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant()?.as_string_v2()?;
         let value = self.stack_top(0);
-        if !self.globals.contains_key(&***name) {
+        if self.globals.get(name).is_none() {
             return Err(RuntimeError::UndefinedVariable(name.to_string()));
         }
-        self.globals.insert(Rc::clone(&name), *value);
+        self.globals.set(name, *value);
         Ok(())
     }
 
     /// Declare a variable with some initial value.
-    fn defined_global(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+    fn define_global(&mut self) -> Result<(), RuntimeError> {
+        let name = self.read_constant()?.as_string_v2()?;
         let value = self.stack_pop();
-        self.globals.insert(Rc::clone(&name), value);
+        self.globals.set(name, value);
         Ok(())
     }
 
@@ -711,10 +709,10 @@ impl VirtualMachine {
         let res = match (*lhs, rhs) {
             // Operations on objects might allocate a new one.
             (Value::Object(o1), Value::Object(o2)) => match (o1, o2) {
-                (Object::String(s1), Object::String(s2)) => {
-                    let mut s = String::with_capacity(s1.len() + s1.len());
-                    s.push_str(s1.as_ref());
-                    s.push_str(s2.as_ref());
+                (Object::StringV2(s1), Object::StringV2(s2)) => {
+                    let mut s = String::with_capacity(s1.data.len() + s1.data.len());
+                    s.push_str(s1.data.as_ref());
+                    s.push_str(s2.data.as_ref());
                     let (object, _) = self.alloc_string(s);
                     Value::Object(object)
                 }
@@ -808,6 +806,9 @@ impl VirtualMachine {
 
     fn mark_roots(&mut self) {
         self.grey_objects.clear();
+        if self.str_init.mark() {
+            self.grey_objects.push(Object::StringV2(self.str_init));
+        }
         for value in &self.stack {
             if let Value::Object(o) = value {
                 o.mark(&mut self.grey_objects);
@@ -823,8 +824,11 @@ impl VirtualMachine {
                 self.grey_objects.push(Object::Upvalue(*upvalue));
             }
         }
-        for value in self.globals.values() {
-            if let Value::Object(o) = value {
+        for (k, v) in self.globals.iter() {
+            if k.mark() {
+                self.grey_objects.push(Object::StringV2(k))
+            }
+            if let Value::Object(o) = v {
                 o.mark(&mut self.grey_objects);
             }
         }
@@ -916,7 +920,7 @@ impl VirtualMachine {
             let line = frame.closure.fun.chunk.get_line(offset - 1);
             match &frame.closure.fun.name {
                 None => eprintln!("{line} in script."),
-                Some(s) => eprintln!("{line} in {s}()."),
+                Some(s) => eprintln!("{line} in {}().", s.data),
             }
         }
         Ok(())
@@ -928,18 +932,21 @@ impl VirtualMachine {
         arity: u8,
         call: fn(&[Value]) -> Value,
     ) -> Result<(), RuntimeError> {
-        let fun_name = self.heap.intern(String::from(name));
+        let (name, name_ref) = self.alloc_string(String::from(name));
+        self.stack_push(Value::Object(name))?;
         let (fun, _) = self.alloc_native_fun(ObjNativeFun { arity, call });
         self.stack_push(Value::Object(fun))?;
-        self.globals.insert(fun_name, *self.stack_top(0));
+        self.globals.set(name_ref, *self.stack_top(0));
+
+        self.stack_pop();
         self.stack_pop();
         Ok(())
     }
 
-    fn alloc_string(&mut self, s: String) -> (Object, RefString) {
+    fn alloc_string(&mut self, s: String) -> (Object, RefStringV2) {
         self.gc();
         let s = self.heap.intern(s);
-        self.heap.alloc(s, Object::String)
+        (Object::StringV2(s), s)
     }
 
     fn alloc_upvalue(&mut self, upvalue: ObjUpvalue) -> (Object, RefUpvalue) {

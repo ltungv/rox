@@ -10,6 +10,7 @@ mod object;
 mod opcode;
 mod scan;
 mod stack;
+mod table;
 mod value;
 mod vm;
 

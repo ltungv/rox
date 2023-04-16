@@ -42,4 +42,4 @@ A bytecode virtual machine written in Rust for the Lox programming language.
 
 + [x] Fixed-size stack with no bounds check on access.
 + [x] Cached the chunk instructions pointer.
-+ [ ] HashMap using the iterned string pointer addresses as its keys.
++ [x] Custom HashMap using the iterned string pointer addresses as its keys.
