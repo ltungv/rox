@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    compile::Parser,
+    compile::{Parser, MAX_FRAMES},
     heap::Heap,
     object::{
         ObjBoundMethod, ObjClass, ObjClosure, ObjFun, ObjInstance, ObjNativeFun, ObjUpvalue,
@@ -26,9 +26,6 @@ use crate::chunk::disassemble_instruction;
 
 /// The max number of values can be put onto the virtual machine's stack.
 const VM_STACK_SIZE: usize = 256;
-
-/// The max number of call frames can be handled by the virtual machine.
-const VM_FRAMES_MAX: usize = 64;
 
 /// An enumeration of potential errors occur when running the bytecodes.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
@@ -90,7 +87,7 @@ pub enum RuntimeError {
 /// A bytecode virtual machine for the Lox programming language.
 pub struct VirtualMachine {
     stack: Stack<Value, VM_STACK_SIZE>,
-    frames: Stack<CallFrame, VM_FRAMES_MAX>,
+    frames: Stack<CallFrame, MAX_FRAMES>,
     current_frame: NonNull<CallFrame>,
     open_upvalues: Vec<RefUpvalue>,
     globals: Table<Value>,
@@ -866,7 +863,7 @@ impl VirtualMachine {
 
     fn frames_push(&mut self, frame: CallFrame) -> Result<usize, RuntimeError> {
         let frame_count = self.frames.len();
-        if frame_count == VM_FRAMES_MAX {
+        if frame_count == MAX_FRAMES {
             return Err(RuntimeError::StackOverflow);
         }
         self.frames.push(frame);

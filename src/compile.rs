@@ -6,11 +6,15 @@ use crate::{
     object::{ObjFun, Object},
     opcode::Opcode,
     scan::{Kind, Line, Scanner, Token},
+    stack::Stack,
     value::Value,
 };
 
 #[cfg(feature = "dbg-execution")]
 use crate::chunk::disassemble_chunk;
+
+/// The max number of call frames can be handled by the virtual machine.
+pub(crate) const MAX_FRAMES: usize = 64;
 
 /// Max number of parameters a function can accept.
 const MAX_PARAMS: usize = u8::MAX as usize;
@@ -80,9 +84,9 @@ pub(crate) struct Parser<'src, 'vm> {
     /// The scanner for turning source bytes into tokens.
     scanner: Scanner<'src>,
     /// The compiler's state for tracking classes.
-    classes: Vec<ClassCompiler>,
+    classes: Stack<ClassCompiler, MAX_FRAMES>,
     /// The compiler's state for tracking scopes.
-    compilers: Vec<Compiler<'src>>,
+    compilers: Stack<Compiler<'src>, MAX_FRAMES>,
     /// The heap of the currently running virtual machine.
     heap: &'vm mut Heap,
 }
@@ -91,14 +95,16 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Create a new parser that reads the given source string.
     pub(crate) fn new(src: &'src str, heap: &'vm mut Heap) -> Self {
         let fun = ObjFun::new(None);
+        let mut compilers = Stack::default();
+        compilers.push(Compiler::new(fun, FunctionType::Script));
         Self {
             had_error: false,
             panicking: false,
             token_prev: Token::placeholder(),
             token_curr: Token::placeholder(),
             scanner: Scanner::new(src),
-            classes: Vec::new(),
-            compilers: vec![Compiler::new(fun, FunctionType::Script)],
+            classes: Stack::default(),
+            compilers,
             heap,
         }
     }
@@ -116,7 +122,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn take(&mut self) -> Compiler<'src> {
         self.emit_return();
-        let mut compiler = self.compilers.pop().expect("Invalid state.");
+        let mut compiler = self.compilers.pop();
         compiler.fun.upvalue_count = compiler.upvalues.len() as u8;
 
         #[cfg(feature = "dbg-execution")]
@@ -385,7 +391,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let compiler = self.compiler_mut(0);
         // Skip this step for global scope.
         if compiler.scope_depth > 0 {
-            for local in compiler.locals.iter().rev() {
+            for local in compiler.locals.into_iter().rev() {
                 if local.depth != -1 && local.depth < compiler.scope_depth {
                     // Stop if we've gone through all initialized variable in the current scope.
                     break;
@@ -469,8 +475,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let compiler = self.compiler_mut(0);
         // Do nothing if we are in the global scope.
         if compiler.scope_depth > 0 {
-            let local = compiler.locals.last_mut().expect("Expect local variable.");
-            local.depth = compiler.scope_depth;
+            compiler.locals.top_mut(0).depth = compiler.scope_depth;
         }
     }
 
@@ -949,7 +954,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Parse the 'this' keyword as a local variable.
     fn this(&mut self) {
-        if self.classes.is_empty() {
+        if self.classes.len() == 0 {
             self.error_prev("Can't use 'this' outside of a class.");
             return;
         }
@@ -958,7 +963,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Parse the 'this' keyword as a local variable.
     fn super_(&mut self) {
-        if self.classes.is_empty() {
+        if self.classes.len() == 0 {
             self.error_prev("Can't use 'super' outside of a class.");
         } else if !self.class_compiler(0).has_super {
             self.error_prev("Can't use 'super' in a class with no superclass.");
@@ -1049,7 +1054,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
         // Walk up from low scope to high scope to find a local with the given name.
         let compiler = self.compiler(height);
-        for (id, local) in compiler.locals.iter().enumerate().rev() {
+        for (id, local) in compiler.locals.into_iter().enumerate().rev() {
             if local.name == name.lexeme {
                 if local.depth == -1 {
                     self.error_prev("Can't read local variable in its own initializer.");
@@ -1074,7 +1079,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if let Some(local) = self.resolve_local(name, height + 1) {
             // Mark the variable in the enclosing function as captured so we know to emit the
             // correct opcode for hoisting up the upvalue.
-            self.compiler_mut(height + 1).locals[local as usize].is_captured = true;
+            unsafe {
+                self.compiler_mut(height + 1)
+                    .locals
+                    .at_mut(local as usize)
+                    .is_captured = true;
+            }
             return Some(self.add_upvalue(height, local, true));
         }
         // Find a matching upvalue in the enclosing function. An upvalue is like a node in a linked
@@ -1091,7 +1101,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// corresponding upvalue is returned instead of adding a new upvalue.
     fn add_upvalue(&mut self, height: usize, index: u8, is_local: bool) -> u8 {
         // Find an upvalue that references the same index.
-        for (upval_index, upval) in self.compiler(height).upvalues.iter().enumerate() {
+        for (upval_index, upval) in self.compiler(height).upvalues.into_iter().enumerate() {
             if upval.index == index && upval.is_local == is_local {
                 return upval_index as u8;
             }
@@ -1247,7 +1257,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn end_scope(&mut self) {
         // Update the current scope.
         self.compiler_mut(0).scope_depth -= 1;
-        while let Some(local) = self.compiler(0).locals.last() {
+        while self.compiler(0).locals.len() > 0 {
+            let local = self.compiler(0).locals.top(0);
             // End once we reach the current scope.
             if local.depth <= self.compiler(0).scope_depth {
                 break;
@@ -1265,22 +1276,22 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn class_compiler(&self, height: usize) -> &ClassCompiler {
         let index = self.classes.len() - height - 1;
-        &self.classes[index]
+        unsafe { self.classes.at(index) }
     }
 
     fn class_compiler_mut(&mut self, height: usize) -> &mut ClassCompiler {
         let index = self.classes.len() - height - 1;
-        &mut self.classes[index]
+        unsafe { self.classes.at_mut(index) }
     }
 
     fn compiler(&self, height: usize) -> &Compiler<'src> {
         let index = self.compilers.len() - height - 1;
-        &self.compilers[index]
+        unsafe { self.compilers.at(index) }
     }
 
     fn compiler_mut(&mut self, height: usize) -> &mut Compiler<'src> {
         let index = self.compilers.len() - height - 1;
-        &mut self.compilers[index]
+        unsafe { self.compilers.at_mut(index) }
     }
 
     /// Synchronize the parser to a normal state where we can continue parsing
@@ -1400,9 +1411,9 @@ struct Compiler<'src> {
     /// The number of "blocks" surrounding the current piece of code that we're compiling.
     scope_depth: isize,
     /// A stack of local variables sorted by the order in which they are declared.
-    locals: Vec<Local<'src>>,
+    locals: Stack<Local<'src>, MAX_LOCALS>,
     /// A stack of local variables sorted by the order in which they are declared.
-    upvalues: Vec<Upvalue>,
+    upvalues: Stack<Upvalue, MAX_UPVALUES>,
 }
 
 impl<'src> Compiler<'src> {
@@ -1414,7 +1425,7 @@ impl<'src> Compiler<'src> {
             _ => "",
         };
 
-        let mut locals = Vec::with_capacity(MAX_LOCALS);
+        let mut locals = Stack::default();
         locals.push(Local {
             name: first_slot_name,
             depth: 0,
@@ -1426,7 +1437,7 @@ impl<'src> Compiler<'src> {
             fun_type,
             scope_depth: 0,
             locals,
-            upvalues: Vec::with_capacity(MAX_UPVALUES),
+            upvalues: Stack::default(),
         }
     }
 }
