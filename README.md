@@ -1,6 +1,6 @@
 # Rox
 
-A bytecode virtual machine written in Rust for the Lox programming language.
+A bytecode virtual machine written in Rust for the Lox programming language. This version performs 30%-50% slower than the original C-implementation.
 
 ## Implemented challenges
 
