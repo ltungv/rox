@@ -154,12 +154,11 @@ impl<V> Table<V> {
     /// Resize the table to the given capacity.
     fn resize(&mut self) {
         // Allocate the new array.
-        let old_ptr = self.ptr.as_ptr();
         let old_capacity = self.capacity;
-        let new_capacity = self.capacity.mul(2).max(8);
-        // SAFETY: We ensure that `new_capacity` has a minimum value of 8.
-        self.ptr = unsafe { Self::alloc(new_capacity) };
-        self.capacity = new_capacity;
+        let old_ptr = self.ptr.as_ptr();
+        // SAFETY: We ensure that `self.capacity` has a minimum value of 8 at this point.
+        self.capacity = self.capacity.mul(2).max(8);
+        self.ptr = unsafe { Self::alloc(self.capacity) };
         self.tombstones = 0;
         // Rehash existing entries and copy them over to the new array. Tombstones are ignored.
         for i in 0..old_capacity {
