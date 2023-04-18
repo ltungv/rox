@@ -24,8 +24,7 @@ impl<V> Table<V> {
             self.resize();
         }
         let entry = self.find_entry_mut(key);
-        let entry_old = mem::replace(entry, Entry::Occupied(EntryInner { key, val }));
-        match entry_old {
+        match mem::replace(entry, Entry::Occupied(EntryInner { key, val })) {
             Entry::Vaccant => {
                 self.occupants += 1;
                 None
@@ -45,8 +44,7 @@ impl<V> Table<V> {
         if self.occupants == 0 {
             return None;
         }
-        let entry = self.find_entry(key);
-        if let Entry::Occupied(e) = entry {
+        if let Entry::Occupied(e) = self.find_entry(key) {
             Some(&e.val)
         } else {
             None
@@ -60,8 +58,7 @@ impl<V> Table<V> {
             return None;
         }
         let entry = self.find_entry_mut(key);
-        let entry_old = mem::replace(entry, Entry::Tombstone);
-        if let Entry::Occupied(e) = entry_old {
+        if let Entry::Occupied(e) = mem::replace(entry, Entry::Tombstone) {
             self.occupants -= 1;
             self.tombstones += 1;
             Some(e.val)
