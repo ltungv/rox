@@ -1,7 +1,8 @@
-use std::{alloc, mem, ptr::NonNull};
+use std::{alloc, marker::PhantomData, mem, ops::Mul, ptr::NonNull};
 
 use crate::object::{Gc, RefString};
 
+/// A hash table mapping from `RefString` to `V`. Conflicting keys are resolved using linear probing.
 #[derive(Debug)]
 pub(crate) struct Table<V> {
     ptr: NonNull<Entry<V>>,
@@ -11,11 +12,54 @@ pub(crate) struct Table<V> {
 }
 
 impl<V> Table<V> {
+    /// Get the number of entries that are currently stored in the table.
+    pub(crate) fn len(&self) -> usize {
+        self.occupants
+    }
+
+    /// Set the value associated with the given key.
+    /// If the key is already present, the previous value is returned.
+    pub(crate) fn set(&mut self, key: RefString, val: V) -> Option<V> {
+        if self.occupants + self.tombstones >= self.capacity * 3 / 4 {
+            self.resize();
+        }
+        let entry = self.find_entry_mut(key);
+        let entry_old = mem::replace(entry, Entry::Occupied(EntryInner { key, val }));
+        match entry_old {
+            Entry::Vaccant => {
+                self.occupants += 1;
+                None
+            }
+            Entry::Tombstone => {
+                self.occupants += 1;
+                self.tombstones -= 1;
+                None
+            }
+            Entry::Occupied(e) => Some(e.val),
+        }
+    }
+
+    // Get the value associated with the given key.
+    // If the key is not present, `None` is returned.
+    pub(crate) fn get(&self, key: RefString) -> Option<&V> {
+        if self.occupants == 0 {
+            return None;
+        }
+        let entry = self.find_entry(key);
+        if let Entry::Occupied(e) = entry {
+            Some(&e.val)
+        } else {
+            None
+        }
+    }
+
+    // Delete the value associated with the given key and return it.
+    // If the key is not present, `None` is returned.
     pub(crate) fn del(&mut self, key: RefString) -> Option<V> {
         if self.occupants == 0 {
             return None;
         }
-        let entry = unsafe { &mut *self.find_entry(key) };
+        let entry = self.find_entry_mut(key);
         let entry_old = mem::replace(entry, Entry::Tombstone);
         if let Entry::Occupied(e) = entry_old {
             self.occupants -= 1;
@@ -26,14 +70,17 @@ impl<V> Table<V> {
         }
     }
 
+    /// Find the pointer to the key that matches the given string and hash.
+    // If no key matches, `None` is returned.
     pub(crate) fn find(&self, s: &str, hash: u32) -> Option<RefString> {
         if self.occupants == 0 {
             return None;
         }
         let mut index = hash as usize & (self.capacity - 1);
         loop {
-            let entry_ptr = unsafe { self.ptr.as_ptr().add(index) };
-            let entry = unsafe { &*entry_ptr };
+            // SAFETY: `index` is always less than `self.capacity` because `index = x mod self.capacity`,
+            // where `x` is an arbitrary integer value.
+            let entry = unsafe { &*self.ptr.as_ptr().add(index) };
             match &entry {
                 Entry::Vaccant => return None,
                 Entry::Occupied(e) => {
@@ -48,20 +95,38 @@ impl<V> Table<V> {
         }
     }
 
-    pub fn iter(&self) -> TableIter<V> {
+    /// Get the iterator over all entries in the table.
+    pub fn iter(&self) -> TableIter<'_, V> {
         TableIter {
-            ptr: self.ptr.as_ptr(),
-            end: unsafe { self.ptr.as_ptr().add(self.capacity) },
+            ptr: self.ptr,
+            ptr_: PhantomData,
+            offset: 0,
+            capacity: self.capacity,
         }
     }
 
-    /// Find the entry associated with the given key. If the 2 different keys have the same hash,
-    /// linear probing is used to find the correct entry.
-    fn find_entry(&self, key: RefString) -> *mut Entry<V> {
+    /// Get a shared reference the entry associated with the given key.
+    fn find_entry(&self, key: RefString) -> &Entry<V> {
+        // SAFETY: We make sure `probe` always returns a valid and initialized pointer.
+        unsafe { &*self.probe(key) }
+    }
+
+    /// Get an exclusive reference the entry associated with the given key.
+    fn find_entry_mut(&mut self, key: RefString) -> &mut Entry<V> {
+        // SAFETY: We make sure `probe` always returns a valid and initialized pointer.
+        unsafe { &mut *self.probe(key) }
+    }
+
+    /// Find the pointer to the entry associated with the given key. If the 2 different keys
+    /// have the same hash, linear probing is used to find the correct entry.
+    fn probe(&self, key: RefString) -> *mut Entry<V> {
         let mut tombstone = None;
         let mut index = key.hash as usize & (self.capacity - 1);
         loop {
+            // SAFETY: `index` is always less than `self.capacity` because `index = x mod self.capacity`,
+            // where `x` is an arbitrary integer value.
             let entry_ptr = unsafe { self.ptr.as_ptr().add(index) };
+            // SAFETY: `entry_ptr` is always a valid pointer to an initialized `Entry<V>`.
             let entry = unsafe { &*entry_ptr };
             match &entry {
                 Entry::Vaccant => {
@@ -86,77 +151,65 @@ impl<V> Table<V> {
         }
     }
 
-    fn entries_layout(cap: usize) -> alloc::Layout {
-        alloc::Layout::array::<Entry<V>>(cap).expect("Invalid layout.")
-    }
-}
-
-impl<V: Copy> Table<V> {
-    /// Set the value associated with the given key.
-    /// If the key is already present, the previous value is returned.
-    pub(crate) fn set(&mut self, key: RefString, val: V) -> Option<V> {
-        if self.occupants + self.tombstones >= self.capacity * 3 / 4 {
-            let cap = self.capacity * 2;
-            self.resize(cap.max(8));
-        }
-        let entry = unsafe { &mut *self.find_entry(key) };
-        let entry_old = mem::replace(entry, Entry::Occupied(EntryInner { key, val }));
-        match entry_old {
-            Entry::Vaccant => {
-                self.occupants += 1;
-                None
-            }
-            Entry::Tombstone => {
-                self.occupants += 1;
-                self.tombstones -= 1;
-                None
-            }
-            Entry::Occupied(e) => Some(e.val),
-        }
-    }
-
-    pub(crate) fn get(&self, key: RefString) -> Option<V> {
-        if self.occupants == 0 {
-            return None;
-        }
-        let entry = unsafe { &*self.find_entry(key) };
-        if let Entry::Occupied(e) = entry {
-            Some(e.val)
-        } else {
-            None
-        }
-    }
-
     /// Resize the table to the given capacity.
-    fn resize(&mut self, cap_new: usize) {
+    fn resize(&mut self) {
         // Allocate the new array.
-        let cap_old = self.capacity;
-        let ptr_old = self.ptr.as_ptr();
-        self.capacity = cap_new;
-        self.ptr = unsafe {
-            NonNull::new_unchecked(alloc::alloc(Self::entries_layout(self.capacity)).cast())
-        };
-        // Initalized the new array.
-        for i in 0..self.capacity {
-            let entry = unsafe { &mut *self.ptr.as_ptr().add(i) };
-            *entry = Entry::Vaccant;
-        }
-        // Rehash existing entries and copy them over to the new array.
+        let old_ptr = self.ptr.as_ptr();
+        let old_capacity = self.capacity;
+        let new_capacity = self.capacity.mul(2).max(8);
+        // SAFETY: We ensure that `new_capacity` has a minimum value of 8.
+        self.ptr = unsafe { Self::alloc(new_capacity) };
+        self.capacity = new_capacity;
         self.tombstones = 0;
-        for i in 0..cap_old {
-            let entry_old = unsafe { &*ptr_old.add(i) };
-            if let Entry::Occupied(e) = &entry_old {
-                let entry_new = unsafe { &mut *self.find_entry(e.key) };
-                *entry_new = Entry::Occupied(EntryInner {
-                    key: e.key,
-                    val: e.val,
-                });
+        // Rehash existing entries and copy them over to the new array. Tombstones are ignored.
+        for i in 0..old_capacity {
+            // SAFETY: We only access pointers in the range of `old_ptr` and `old_ptr + old_capacity`.
+            let entry_old = unsafe { &mut *old_ptr.add(i) };
+            if let Entry::Occupied(e) = entry_old {
+                let entry_new = self.find_entry_mut(e.key);
+                mem::swap(entry_new, entry_old)
             }
         }
         // Deallocate the old array.
-        if cap_old > 0 {
-            unsafe { alloc::dealloc(ptr_old.cast(), Self::entries_layout(cap_old)) };
+        // SAFETY: We ensure both `self.ptr` and `self.capacity` represent a valid array
+        // that was previously allocated.
+        unsafe { Self::dealloc(old_ptr, old_capacity) };
+    }
+
+    /// Allocate an array of `Entry<V>` with the given capacity and return the raw pointer
+    /// to the beginning of the array.
+    ///
+    /// ## Safety
+    ///
+    /// `capacity` must be larger than 0, otherwise, it's undefined behaviour.
+    unsafe fn alloc(capacity: usize) -> NonNull<Entry<V>> {
+        // SAFETY: The caller of this function must ensure that `capacity` is larger than 0.
+        let ptr: *mut Entry<V> = unsafe { alloc::alloc(Self::entries_layout(capacity)).cast() };
+        for i in 0..capacity {
+            // SAFETY: We only access pointers in the range of `ptr` and `ptr + capacity`.
+            unsafe { ptr.add(i).write(Entry::Vaccant) };
         }
+        // SAFETY: We just allocated, thus `ptr` must be non-null.
+        unsafe { NonNull::new_unchecked(ptr) }
+    }
+
+    /// Deallocate the array of `Entry<V>` with the given capacity.
+    ///
+    /// ## Safety
+    ///
+    /// + `ptr` must be a valid pointer to the array of `Entry<V>` with the given `capacity`.
+    /// + `ptr` must be allocated with the same allocator as `Self::alloc`.
+    unsafe fn dealloc(ptr: *mut Entry<V>, capacity: usize) {
+        if capacity > 0 {
+            // SAFETY: The caller of this function must ensure that `ptr` is a valid pointer to
+            // the array of `Entry<V>` with the given `capacity`.
+            unsafe { alloc::dealloc(ptr.cast(), Self::entries_layout(capacity)) };
+        }
+    }
+
+    /// Return the memory layout of an array of `Entry<V>` with the given capacity.
+    fn entries_layout(cap: usize) -> alloc::Layout {
+        alloc::Layout::array::<Entry<V>>(cap).expect("Invalid layout.")
     }
 }
 
@@ -173,14 +226,8 @@ impl<V> Default for Table<V> {
 
 impl<V> Drop for Table<V> {
     fn drop(&mut self) {
-        if self.capacity > 0 {
-            unsafe {
-                alloc::dealloc(
-                    self.ptr.as_ptr().cast(),
-                    Self::entries_layout(self.capacity),
-                );
-            }
-        }
+        // SAFETY: We ensure both `self.ptr` and `self.capacity` represent a valid array.
+        unsafe { Self::dealloc(self.ptr.as_ptr(), self.capacity) };
     }
 }
 
@@ -197,20 +244,25 @@ struct EntryInner<V> {
     val: V,
 }
 
-pub struct TableIter<V> {
-    ptr: *mut Entry<V>,
-    end: *const Entry<V>,
+pub struct TableIter<'table, V> {
+    ptr: NonNull<Entry<V>>,
+    ptr_: PhantomData<&'table Entry<V>>,
+    offset: usize,
+    capacity: usize,
 }
 
-impl<V: Copy> Iterator for TableIter<V> {
-    type Item = (RefString, V);
+impl<'table, V> Iterator for TableIter<'table, V> {
+    type Item = (RefString, &'table V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.ptr as *const Entry<V> != self.end {
-            let entry = unsafe { &*self.ptr };
-            self.ptr = unsafe { self.ptr.add(1) };
+        while self.offset < self.capacity {
+            // SAFETY: The caller of this function must ensure that `ptr` is a valid pointer to
+            // the array of `Entry<V>` with the given `capacity`. Additionally, `self.offset`
+            // is always less than `self.capacity`.
+            let entry = unsafe { &*self.ptr.as_ptr().add(self.offset) };
+            self.offset += 1;
             if let Entry::Occupied(x) = entry {
-                return Some((x.key, x.val));
+                return Some((x.key, &x.val));
             }
         }
         None
@@ -354,7 +406,7 @@ mod tests {
         let key = heap.intern("key".to_string());
 
         table.set(key, Value::Bool(true));
-        let get_result = table.get(key);
+        let get_result = table.get(key).copied();
         let del_result = table.del(key);
         assert_eq!(get_result, del_result);
         let del_result = table.del(key);

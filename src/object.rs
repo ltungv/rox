@@ -374,7 +374,7 @@ impl ObjClass {
                 grey_objects.push(Object::String(k));
             }
             if v.mark() {
-                grey_objects.push(Object::Closure(v));
+                grey_objects.push(Object::Closure(*v));
             }
         }
     }

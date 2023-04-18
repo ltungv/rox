@@ -250,8 +250,8 @@ impl VirtualMachine {
             .map_err(|_| RuntimeError::InvalidMethodInvocation)?;
 
         if let Some(field) = instance.borrow().fields.get(method) {
-            *self.stack_top_mut(argc as usize) = field;
-            self.call_value(field, argc)?;
+            *self.stack_top_mut(argc as usize) = *field;
+            self.call_value(*field, argc)?;
         } else {
             self.invoke_from_class(instance.borrow().class, method, argc)?;
         }
@@ -265,12 +265,12 @@ impl VirtualMachine {
         name: RefString,
         argc: u8,
     ) -> Result<(), RuntimeError> {
-        let method = class
-            .borrow()
+        let class_ref = class.borrow();
+        let method = class_ref
             .methods
             .get(name)
             .ok_or_else(|| RuntimeError::UndefinedProperty(name.to_string()))?;
-        self.call_closure(method, argc)?;
+        self.call_closure(*method, argc)?;
         Ok(())
     }
 
@@ -289,7 +289,7 @@ impl VirtualMachine {
             Some(method) => {
                 let (bound, _) = self.alloc_bound_method(ObjBoundMethod {
                     receiver: *self.stack_top(0),
-                    method,
+                    method: *method,
                 });
                 self.stack_pop();
                 self.stack_push(Value::Object(bound))?;
@@ -309,7 +309,7 @@ impl VirtualMachine {
         let instance = instance.borrow();
         if let Some(value) = instance.fields.get(name) {
             self.stack_pop();
-            self.stack_push(value)?;
+            self.stack_push(*value)?;
             Ok(())
         } else if self.bind_method(instance.class, name)? {
             Ok(())
@@ -355,7 +355,7 @@ impl VirtualMachine {
             .map_err(|_| RuntimeError::InvalidSuperclass)?;
         let subclass = self.stack_top(0).as_class()?;
         for (method_name, method) in superclass.borrow().methods.iter() {
-            subclass.borrow_mut().methods.set(method_name, method);
+            subclass.borrow_mut().methods.set(method_name, *method);
         }
         self.stack_pop();
         Ok(())
@@ -553,7 +553,7 @@ impl VirtualMachine {
         *self.stack_top_mut(argc.into()) = Value::Object(instance);
         // Call the 'init' method if there's one
         if let Some(init) = callee.borrow().methods.get(self.str_init) {
-            self.call_closure(init, argc)?;
+            self.call_closure(*init, argc)?;
         } else if argc != 0 {
             return Err(RuntimeError::InvalidArgumentsCount { arity: 0, argc });
         }
@@ -626,7 +626,7 @@ impl VirtualMachine {
             .globals
             .get(name)
             .ok_or_else(|| RuntimeError::UndefinedVariable(name.to_string()))?;
-        self.stack_push(value)?;
+        self.stack_push(*value)?;
         Ok(())
     }
 

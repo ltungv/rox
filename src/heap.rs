@@ -1,7 +1,6 @@
 use crate::{
     object::{Gc, GcData, ObjString, Object, RefString},
     table::Table,
-    value::Value,
 };
 
 #[cfg(feature = "dbg-heap")]
@@ -27,7 +26,7 @@ pub(crate) struct Heap {
     alloc_bytes: usize,
     gc_next_threshold: usize,
     gc_growth_factor: usize,
-    strings: Table<Value>,
+    strings: Table<()>,
     // The head of the singly linked list of heap-allocated objects.
     head: Option<Object>,
 }
@@ -75,7 +74,7 @@ impl Heap {
             None => {
                 let obj_string = ObjString { data, hash };
                 let (_, s) = self.alloc(obj_string, Object::String);
-                self.strings.set(s, Value::Nil);
+                self.strings.set(s, ());
                 #[cfg(feature = "dbg-heap")]
                 println!(
                     "{:p} alloc '{}' ({} bytes)",
@@ -99,10 +98,14 @@ impl Heap {
         let mut prev_obj: Option<Object> = None;
         let mut curr_obj = self.head;
 
+        let mut dangling_strings = Vec::with_capacity(self.strings.len());
         for (k, _) in self.strings.iter() {
             if !k.is_marked() {
-                self.strings.del(k);
+                dangling_strings.push(k);
             }
+        }
+        for s in dangling_strings {
+            self.strings.del(s);
         }
 
         while let Some(curr_ref) = curr_obj {
