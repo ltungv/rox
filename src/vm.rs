@@ -2,6 +2,7 @@
 
 use std::{
     cell::RefCell,
+    error, fmt,
     ops::{Add, Deref, DerefMut, Div, Mul, Neg, Not, Sub},
     ptr::NonNull,
 };
@@ -28,60 +29,69 @@ use crate::chunk::disassemble_instruction;
 const VM_STACK_SIZE: usize = 256;
 
 /// An enumeration of potential errors occur when running the bytecodes.
-#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Debug)]
 pub enum RuntimeError {
-    /// Can't parse a byte as an opcode.
-    #[error(transparent)]
-    InvalidOpcode(#[from] num_enum::TryFromPrimitiveError<Opcode>),
-
     /// Can't perform some operations given the current value(s).
-    #[error(transparent)]
-    Value(#[from] ValueError),
-
+    Value(ValueError),
     /// Can't perform some operations given the current object(s).
-    #[error(transparent)]
-    Object(#[from] ObjectError),
-
+    Object(ObjectError),
     /// Overflow the virtual machine's stack.
-    #[error("Stack overflow.")]
     StackOverflow,
-
     /// Can't access a property.
-    #[error("Only instances have properties.")]
     ObjectHasNoProperty,
-
     /// Can't access a field.
-    #[error("Only instances have fields.")]
     ObjectHasNoField,
-
     /// Can't find a variable in scope.
-    #[error("Undefined variable '{0}'.")]
     UndefinedVariable(String),
-
     /// Can't find a property in the instance.
-    #[error("Undefined property '{0}'.")]
     UndefinedProperty(String),
-
     /// Can't inherit objects that are not supported.
-    #[error("Superclass must be a class.")]
     InvalidSuperclass,
-
     /// Can't call objects that are not supported.
-    #[error("Can only call functions and classes.")]
     InvalidCallee,
-
     /// Can't invoke objects that are not supported.
-    #[error("Only instances have methods.")]
     InvalidMethodInvocation,
-
     /// Called a function/method with incorrect number of arguments.
-    #[error("Expected {arity} arguments but got {argc}.")]
     InvalidArgumentsCount {
         /// The arity of the function.
         arity: u8,
         /// The number of arguments given.
         argc: u8,
     },
+}
+
+impl error::Error for RuntimeError {}
+
+impl fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Value(err) => err.fmt(f),
+            Self::Object(err) => err.fmt(f),
+            Self::StackOverflow => f.write_str("Stack overflow."),
+            Self::ObjectHasNoProperty => f.write_str("Only instances have properties."),
+            Self::ObjectHasNoField => f.write_str("Only instances have fields."),
+            Self::UndefinedVariable(name) => write!(f, "Undefined variable '{name}'."),
+            Self::UndefinedProperty(name) => write!(f, "Undefined property '{name}'."),
+            Self::InvalidSuperclass => f.write_str("Superclass must be a class."),
+            Self::InvalidCallee => f.write_str("Can only call functions and classes."),
+            Self::InvalidMethodInvocation => f.write_str("Only instances have methods."),
+            Self::InvalidArgumentsCount { arity, argc } => {
+                write!(f, "Expected {arity} arguments but got {argc}.",)
+            }
+        }
+    }
+}
+
+impl From<ValueError> for RuntimeError {
+    fn from(err: ValueError) -> Self {
+        Self::Value(err)
+    }
+}
+
+impl From<ObjectError> for RuntimeError {
+    fn from(err: ObjectError) -> Self {
+        Self::Object(err)
+    }
 }
 
 /// A bytecode virtual machine for the Lox programming language.
@@ -178,7 +188,7 @@ impl VirtualMachine {
                 disassemble_instruction(&frame.closure.fun.chunk, offset as usize);
             }
 
-            match Opcode::try_from(self.read_byte()?)? {
+            match Opcode::from(self.read_byte()?) {
                 Opcode::Const => self.constant()?,
                 Opcode::Nil => self.stack_push(Value::Nil)?,
                 Opcode::True => self.stack_push(Value::Bool(true))?,

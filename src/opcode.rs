@@ -1,5 +1,3 @@
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-
 /// Opcode is a byte specifying the action that the VM must take.
 ///
 /// # Notes
@@ -17,7 +15,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 /// are implementation details that we should keep in mind when making a real language.
 ///
 /// [IEEE 754]: https://en.wikipedia.org/wiki/IEEE_754
-#[derive(Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
+#[derive(Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Opcode {
     /// Load a constant
@@ -102,4 +100,59 @@ pub enum Opcode {
     Inherit = 39,
     /// Define a method
     Method = 40,
+}
+
+impl From<Opcode> for u8 {
+    fn from(op: Opcode) -> Self {
+        op as u8
+    }
+}
+
+impl From<u8> for Opcode {
+    fn from(byte: u8) -> Self {
+        match byte {
+            0 => Opcode::Const,
+            1 => Opcode::Nil,
+            2 => Opcode::True,
+            3 => Opcode::False,
+            4 => Opcode::Pop,
+            5 => Opcode::GetLocal,
+            6 => Opcode::SetLocal,
+            7 => Opcode::GetGlobal,
+            8 => Opcode::SetGlobal,
+            9 => Opcode::DefineGlobal,
+            10 => Opcode::GetUpvalue,
+            11 => Opcode::SetUpvalue,
+            12 => Opcode::GetProperty,
+            13 => Opcode::SetProperty,
+            14 => Opcode::GetSuper,
+            15 => Opcode::NE,
+            16 => Opcode::EQ,
+            17 => Opcode::GT,
+            18 => Opcode::GE,
+            19 => Opcode::LT,
+            20 => Opcode::LE,
+            21 => Opcode::Add,
+            22 => Opcode::Sub,
+            23 => Opcode::Mul,
+            24 => Opcode::Div,
+            25 => Opcode::Not,
+            26 => Opcode::Neg,
+            27 => Opcode::Print,
+            28 => Opcode::Jump,
+            29 => Opcode::JumpIfTrue,
+            30 => Opcode::JumpIfFalse,
+            31 => Opcode::Loop,
+            32 => Opcode::Call,
+            33 => Opcode::Invoke,
+            34 => Opcode::SuperInvoke,
+            35 => Opcode::Closure,
+            36 => Opcode::CloseUpvalue,
+            37 => Opcode::Ret,
+            38 => Opcode::Class,
+            39 => Opcode::Inherit,
+            40 => Opcode::Method,
+            b => panic!("Unknown byte-code '{b}'"),
+        }
+    }
 }

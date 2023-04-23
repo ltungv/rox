@@ -1,17 +1,28 @@
-use std::{cmp::Ordering, fmt, ops};
+use std::{cmp::Ordering, error, fmt, ops};
 
 use crate::object::{Gc, Object, RefClass, RefClosure, RefFun, RefInstance, RefString};
 
-#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum ValueError {
-    #[error("Operand must be a number.")]
     UnaryOperandsMustBeNumber,
-    #[error("Operands must be numbers.")]
     BinaryOperandsMustBeNumbers,
-    #[error("Operands must be two numbers or two strings.")]
     BinaryOperandsMustBeNumbersOrStrings,
-    #[error("Invalid cast.")]
     InvalidCast,
+}
+
+impl error::Error for ValueError {}
+
+impl fmt::Display for ValueError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnaryOperandsMustBeNumber => write!(f, "Operand must be a number."),
+            Self::BinaryOperandsMustBeNumbers => write!(f, "Operands must be numbers."),
+            Self::BinaryOperandsMustBeNumbersOrStrings => {
+                write!(f, "Operands must be two numbers or two strings.")
+            }
+            Self::InvalidCast => write!(f, "Invalid cast."),
+        }
+    }
 }
 
 /// A enumeration of all supported primitive types in Lox and their underlying value.

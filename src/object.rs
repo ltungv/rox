@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    fmt,
+    error, fmt,
     marker::PhantomData,
     mem,
     ops::{self, BitXor},
@@ -34,10 +34,19 @@ pub(crate) type RefInstance = Gc<RefCell<ObjInstance>>;
 pub(crate) type RefBoundMethod = Gc<ObjBoundMethod>;
 
 /// An enumeration of all potential errors that occur when working with objects.
-#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Debug)]
 pub enum ObjectError {
-    #[error("Invalid cast.")]
     InvalidCast,
+}
+
+impl error::Error for ObjectError {}
+
+impl fmt::Display for ObjectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidCast => write!(f, "Invalid cast."),
+        }
+    }
 }
 
 /// A numeration of all object types.

@@ -9,56 +9,71 @@ pub(crate) struct Stack<T, const N: usize> {
 }
 
 impl<T, const N: usize> Stack<T, N> {
+    /// Add a value to the top of the stack. This method panics if the stack is full.
     pub(crate) fn push(&mut self, value: T) {
         self.items[self.len].write(value);
         self.len += 1;
     }
 
+    /// Remove the value at the top of the stack and return it. This method panics if the stack
+    /// is empty
     pub(crate) fn pop(&mut self) -> T {
         self.len -= 1;
         // SAFETY: All items at index below self.len must have been initialized
         unsafe { self.items[self.len].assume_init_read() }
     }
 
+    /// Remove `count` values from the top of the stack. This method only adjusts the stack pointer
+    /// and makes no modification to the underlying data array.
     pub(crate) fn remove(&mut self, count: usize) {
         self.len -= count;
     }
 
+    /// Remove all values from the stack. This method only adjusts the stack pointer and makes no
+    /// modification to the underlying data array.
     pub(crate) fn clear(&mut self) {
         self.len = 0;
     }
 
+    /// Returns the number of values contained within the stack.
     pub(crate) fn len(&self) -> usize {
         self.len
     }
 
+    /// Get a slice of `count` values at the top of the stack.
     pub(crate) fn topn(&self, count: usize) -> &[T] {
         // SAFETY: All items at index below self.len must have been initialized
         unsafe { mem::transmute(&self.items[self.len - count..self.len]) }
     }
 
+    /// Get a reference to the value at the top of the stack.
     pub(crate) fn top(&self, n: usize) -> &T {
         // SAFETY: All items at index below self.len must have been initialized
         unsafe { self.at(self.len - n - 1) }
     }
 
+    /// Get a mutable reference to the value at the top of the stack.
     pub(crate) fn top_mut(&mut self, n: usize) -> &mut T {
         // SAFETY: All items at index below self.len must have been initialized
         unsafe { self.at_mut(self.len - n - 1) }
     }
 
-    // ## Safety
-    //
-    // Caller must ensure that the index points to a valid item in the stack.
+    /// Get a reference to the value at the given index in the stack.
+    ///
+    /// ## Safety
+    ///
+    /// Caller must ensure that the index points to a valid item in the stack.
     pub(crate) unsafe fn at(&self, index: usize) -> &T {
-        self.items[index].assume_init_ref()
+        self.items.get_unchecked(index).assume_init_ref()
     }
 
-    // ## Safety
-    //
-    // Caller must ensure that the index points to a valid item in the stack.
+    /// Get a mutable reference to the value at the given index in the stack.
+    ///
+    /// ## Safety
+    ///
+    /// Caller must ensure that the index points to a valid item in the stack.
     pub(crate) unsafe fn at_mut(&mut self, index: usize) -> &mut T {
-        self.items[index].assume_init_mut()
+        self.items.get_unchecked_mut(index).assume_init_mut()
     }
 }
 

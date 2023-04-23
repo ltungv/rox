@@ -14,15 +14,26 @@ mod table;
 mod value;
 mod vm;
 
+use std::{error, fmt};
+
 pub use vm::{RuntimeError, VirtualMachine};
 
 /// A enumeration of all potential errors that might occur when working with the virtual machine.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum InterpretError {
     /// Error with compiling the source code.
-    #[error("Compile error.")]
     Compile,
     /// Error with running the bytecode.
-    #[error("Runtime error.")]
     Runtime,
+}
+
+impl error::Error for InterpretError {}
+
+impl fmt::Display for InterpretError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Compile => f.write_str("Compile error."),
+            Self::Runtime => f.write_str("Runtime error."),
+        }
+    }
 }
