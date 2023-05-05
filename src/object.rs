@@ -3,7 +3,7 @@ use std::{
     error, fmt,
     marker::PhantomData,
     mem,
-    ops::{self, BitXor},
+    ops::{self, BitXor, Deref},
     ptr::NonNull,
 };
 
@@ -158,19 +158,6 @@ impl Object {
         }
     }
 
-    pub(crate) fn mem_size(&self) -> usize {
-        match self {
-            Object::String(s) => s.mem_size(),
-            Object::Upvalue(v) => v.mem_size(),
-            Object::Closure(c) => c.mem_size(),
-            Object::Fun(f) => f.mem_size(),
-            Object::NativeFun(f) => f.mem_size(),
-            Object::Class(c) => c.mem_size(),
-            Object::Instance(i) => i.mem_size(),
-            Object::BoundMethod(m) => m.mem_size(),
-        }
-    }
-
     #[cfg(feature = "dbg-heap")]
     pub(crate) fn addr(&self) -> usize {
         match self {
@@ -182,6 +169,21 @@ impl Object {
             Self::Class(c) => c.as_ptr() as usize,
             Self::Instance(i) => i.as_ptr() as usize,
             Self::BoundMethod(m) => m.as_ptr() as usize,
+        }
+    }
+}
+
+impl GcSized for Object {
+    fn size(&self) -> usize {
+        match self {
+            Object::String(s) => s.size(),
+            Object::Upvalue(v) => v.size(),
+            Object::Closure(c) => c.size(),
+            Object::Fun(fun) => fun.size(),
+            Object::NativeFun(fun) => fun.size(),
+            Object::Class(c) => c.size(),
+            Object::Instance(i) => i.size(),
+            Object::BoundMethod(m) => m.size(),
         }
     }
 }
@@ -216,6 +218,12 @@ impl ObjString {
             hash = hash.wrapping_mul(16777619);
         }
         hash
+    }
+}
+
+impl GcSized for ObjString {
+    fn size(&self) -> usize {
+        mem::size_of::<Self>() + mem::size_of_val(&*self.data)
     }
 }
 
@@ -256,6 +264,12 @@ impl ObjClosure {
     }
 }
 
+impl GcSized for ObjClosure {
+    fn size(&self) -> usize {
+        mem::size_of::<Self>() + mem::size_of_val(&*self.upvalues)
+    }
+}
+
 impl fmt::Display for ObjClosure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         write!(f, "{}", **self.fun)
@@ -279,6 +293,12 @@ impl ObjUpvalue {
         if let ObjUpvalue::Closed(Value::Object(obj)) = self {
             obj.mark(grey_objects);
         }
+    }
+}
+
+impl GcSized for ObjUpvalue {
+    fn size(&self) -> usize {
+        mem::size_of::<Self>()
     }
 }
 
@@ -327,6 +347,12 @@ impl ObjFun {
     }
 }
 
+impl GcSized for ObjFun {
+    fn size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+}
+
 impl fmt::Display for ObjFun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         match &self.name {
@@ -342,6 +368,12 @@ pub(crate) struct ObjNativeFun {
     pub(crate) arity: u8,
     /// Native function reference
     pub(crate) call: fn(&[Value]) -> Value,
+}
+
+impl GcSized for ObjNativeFun {
+    fn size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
 }
 
 impl fmt::Display for ObjNativeFun {
@@ -389,6 +421,12 @@ impl ObjClass {
     }
 }
 
+impl GcSized for ObjClass {
+    fn size(&self) -> usize {
+        mem::size_of_val(&self.name) + self.methods.size()
+    }
+}
+
 impl fmt::Display for ObjClass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name.data)
@@ -427,6 +465,12 @@ impl ObjInstance {
     }
 }
 
+impl GcSized for ObjInstance {
+    fn size(&self) -> usize {
+        mem::size_of_val(&self.class) + self.fields.size()
+    }
+}
+
 impl fmt::Display for ObjInstance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} instance", (**self.class).borrow())
@@ -452,9 +496,25 @@ impl ObjBoundMethod {
     }
 }
 
+impl GcSized for ObjBoundMethod {
+    fn size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+}
+
 impl fmt::Display for ObjBoundMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", **self.method)
+    }
+}
+
+pub trait GcSized {
+    fn size(&self) -> usize;
+}
+
+impl<T: GcSized> GcSized for RefCell<T> {
+    fn size(&self) -> usize {
+        self.borrow().size()
     }
 }
 
@@ -506,6 +566,12 @@ impl<T> ops::Deref for GcData<T> {
     }
 }
 
+impl<T: GcSized> GcSized for GcData<T> {
+    fn size(&self) -> usize {
+        mem::size_of_val(&self.next) + mem::size_of_val(&self.marked) + self.data.size()
+    }
+}
+
 #[derive(Debug)]
 pub struct Gc<T> {
     ptr: NonNull<GcData<T>>,
@@ -528,13 +594,15 @@ impl<T> Gc<T> {
         self.ptr.eq(&other.ptr)
     }
 
-    pub(crate) fn mem_size(&self) -> usize {
-        mem::size_of_val(&**self)
-    }
-
     #[cfg(feature = "dbg-heap")]
     pub(crate) fn as_ptr(&self) -> *const GcData<T> {
         self.ptr.as_ptr()
+    }
+}
+
+impl<T: GcSized> GcSized for Gc<T> {
+    fn size(&self) -> usize {
+        self.deref().size()
     }
 }
 

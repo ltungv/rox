@@ -1,5 +1,5 @@
 use crate::{
-    object::{Gc, GcData, ObjString, Object, RefString},
+    object::{Gc, GcData, GcSized, ObjString, Object, RefString},
     table::Table,
 };
 
@@ -46,13 +46,13 @@ impl Default for Heap {
 impl Heap {
     /// Allocates a new object and returns a handle to it. The object is pushed to the head of
     /// the list of allocated data.
-    pub(crate) fn alloc<T, F>(&mut self, data: T, map: F) -> (Object, Gc<T>)
+    pub(crate) fn alloc<T: GcSized, F>(&mut self, data: T, map: F) -> (Object, Gc<T>)
     where
         F: Fn(Gc<T>) -> Object,
     {
         let boxed = Box::new(GcData::new(self.head, data));
         let content = Gc::new(boxed);
-        let size = content.mem_size();
+        let size = content.size();
         let object = map(content);
 
         #[cfg(feature = "dbg-heap")]
@@ -63,9 +63,8 @@ impl Heap {
         (object, content)
     }
 
-    /// Interned a string and returned a reference counted pointer to it. If the given string has
-    /// been interned, an existing `Rc<str>` is cloned and returned. Otherwise, we turn the given
-    /// string into a new `Rc<str>` and add it to our collection of unique strings.
+    /// Interned a string and returned a reference to it. The same reference is returned for 2
+    /// equal strings.
     pub(crate) fn intern(&mut self, data: String) -> RefString {
         let hash = ObjString::hash(&data);
         match self.strings.find(&data, hash) {
@@ -154,7 +153,7 @@ impl Heap {
     /// + Before calling this method, we must ensure that the object is removed from the linked list of
     /// heap-allocated objects.
     unsafe fn dealloc(&mut self, object: Object) {
-        let size = object.mem_size();
+        let size = object.size();
 
         #[cfg(feature = "dbg-heap")]
         println!("0x{:x} free {object} ({size} bytes)", object.addr());
