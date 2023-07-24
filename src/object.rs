@@ -423,7 +423,7 @@ impl ObjClass {
 
 impl GcSized for ObjClass {
     fn size(&self) -> usize {
-        mem::size_of_val(&self.name) + self.methods.size()
+        mem::size_of_val(&self.name) + mem::size_of_val(&self.methods)
     }
 }
 
@@ -467,7 +467,7 @@ impl ObjInstance {
 
 impl GcSized for ObjInstance {
     fn size(&self) -> usize {
-        mem::size_of_val(&self.class) + self.fields.size()
+        mem::size_of_val(&self.class) + mem::size_of_val(&self.fields)
     }
 }
 

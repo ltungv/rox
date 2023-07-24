@@ -1,6 +1,6 @@
 use std::{alloc, marker::PhantomData, mem, ops::Mul, ptr::NonNull};
 
-use crate::object::{Gc, RefString, GcSized};
+use crate::object::{Gc, RefString};
 
 /// A hash table mapping from `RefString` to `V`. Conflicting keys are resolved using linear probing.
 #[derive(Debug)]
@@ -206,12 +206,6 @@ impl<V> Table<V> {
     /// Return the memory layout of an array of `Entry<V>` with the given capacity.
     fn entries_layout(cap: usize) -> alloc::Layout {
         alloc::Layout::array::<Entry<V>>(cap).expect("Invalid layout.")
-    }
-}
-
-impl<V> GcSized for Table<V> {
-    fn size(&self) -> usize {
-        mem::size_of::<Self>() + mem::size_of::<Entry<V>>() * self.capacity
     }
 }
 

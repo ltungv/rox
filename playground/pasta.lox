@@ -1,0 +1,24 @@
+class Pasta {
+  init() {
+    this.type = "spaghetti";
+  }
+
+  nomnom() {
+    print "Eating " + this.type + "!";
+  }
+}
+
+fun pasta() {
+  var pasta = Pasta();
+  pasta.nomnom();
+
+  var nomnom = pasta.nomnom;
+  fun eat() {
+    pasta.type = "ravioli";
+    nomnom();
+  }
+
+  return eat;
+}
+
+pasta()();

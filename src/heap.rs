@@ -3,9 +3,6 @@ use crate::{
     table::Table,
 };
 
-#[cfg(feature = "dbg-heap")]
-use std::mem;
-
 /// The default GC threshold when initialize.
 const GC_NEXT_THRESHOLD: usize = 1024 * 1024;
 
@@ -52,14 +49,18 @@ impl Heap {
     {
         let boxed = Box::new(GcData::new(self.head, data));
         let content = Gc::new(boxed);
-        let size = content.size();
         let object = map(content);
+        let size = object.size();
+        self.head = Some(object);
+        self.alloc_bytes += size;
 
         #[cfg(feature = "dbg-heap")]
-        println!("0x{:x} alloc {object} ({size} bytes)", object.addr());
+        println!(
+            "0x{:x} alloc {object} ({size} bytes) [{}]",
+            object.addr(),
+            self.alloc_bytes
+        );
 
-        self.alloc_bytes += size;
-        self.head = Some(object);
         (object, content)
     }
 
@@ -74,13 +75,6 @@ impl Heap {
                 let obj_string = ObjString { data, hash };
                 let (_, s) = self.alloc(obj_string, Object::String);
                 self.strings.set(s, ());
-                #[cfg(feature = "dbg-heap")]
-                println!(
-                    "{:p} alloc '{}' ({} bytes)",
-                    s.as_ptr(),
-                    s.data,
-                    mem::size_of_val(&*s)
-                );
                 s
             }
         }
@@ -154,9 +148,14 @@ impl Heap {
     /// heap-allocated objects.
     unsafe fn dealloc(&mut self, object: Object) {
         let size = object.size();
+        self.alloc_bytes -= size;
 
         #[cfg(feature = "dbg-heap")]
-        println!("0x{:x} free {object} ({size} bytes)", object.addr());
+        println!(
+            "0x{:x} free {object} ({size} bytes) [{}]",
+            object.addr(),
+            self.alloc_bytes
+        );
 
         match object {
             Object::String(s) => {
@@ -184,7 +183,6 @@ impl Heap {
                 m.release();
             }
         };
-        self.alloc_bytes -= size;
     }
 }
 
