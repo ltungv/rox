@@ -617,9 +617,6 @@ impl<T> ops::Deref for Gc<T> {
 impl<T> Copy for Gc<T> {}
 impl<T> Clone for Gc<T> {
     fn clone(&self) -> Self {
-        Self {
-            ptr: self.ptr,
-            ptr_: self.ptr_,
-        }
+        *self
     }
 }

@@ -306,7 +306,7 @@ mod tests {
         let key = heap.intern("key".to_string());
 
         let prev = table.set(key, Value::Bool(true));
-        assert!(matches!(prev, None));
+        assert!(prev.is_none());
 
         let prev = table.set(key, Value::Number(PI));
         assert!(matches!(prev, Some(Value::Bool(true))));
@@ -350,7 +350,7 @@ mod tests {
         let key = heap.intern("key".to_string());
 
         let val = table.get(key);
-        assert!(matches!(val, None));
+        assert!(val.is_none());
     }
 
     #[test]
@@ -406,7 +406,7 @@ mod tests {
         let del_result = table.del(key);
         assert_eq!(get_result, del_result);
         let del_result = table.del(key);
-        assert!(matches!(del_result, None));
+        assert!(del_result.is_none());
     }
 
     #[test]
@@ -416,7 +416,7 @@ mod tests {
         let key = heap.intern("key".to_string());
 
         let s = table.find(&key.data, key.hash);
-        assert!(matches!(s, None));
+        assert!(s.is_none());
     }
 
     #[test]
