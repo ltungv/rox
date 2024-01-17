@@ -28,7 +28,7 @@ use crate::chunk::disassemble_instruction;
 /// The max number of values can be put onto the virtual machine's stack.
 const VM_STACK_SIZE: usize = 256;
 
-/// An enumeration of potential errors occur when running the bytecodes.
+/// An enumeration of potential errors occur when running the byte-codes.
 #[derive(Debug)]
 pub enum RuntimeError {
     /// Can't perform some operations given the current value(s).
@@ -710,7 +710,7 @@ impl VirtualMachine {
 
     fn add(&mut self) -> Result<(), RuntimeError> {
         // The peek the first 2 items on the stack instead of pop so the GC can see them and won't
-        // deaalocate the objects when we allocate a new object for the result.
+        // deallocate the objects when we allocate a new object for the result.
         let rhs = self.stack_top(0);
         let lhs = self.stack_top(1);
         let res = match (*lhs, rhs) {

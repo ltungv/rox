@@ -25,7 +25,7 @@ impl<V> Table<V> {
         }
         let entry = self.find_entry_mut(key);
         match mem::replace(entry, Entry::Occupied(EntryInner { key, val })) {
-            Entry::Vaccant => {
+            Entry::Vacant => {
                 self.occupants += 1;
                 None
             }
@@ -79,7 +79,7 @@ impl<V> Table<V> {
             // where `x` is an arbitrary integer value.
             let entry = unsafe { &*self.ptr.as_ptr().add(index) };
             match &entry {
-                Entry::Vaccant => return None,
+                Entry::Vacant => return None,
                 Entry::Occupied(e) => {
                     if e.key.data == s {
                         return Some(e.key);
@@ -126,7 +126,7 @@ impl<V> Table<V> {
             // SAFETY: `entry_ptr` is always a valid pointer to an initialized `Entry<V>`.
             let entry = unsafe { &*entry_ptr };
             match &entry {
-                Entry::Vaccant => {
+                Entry::Vacant => {
                     return match tombstone {
                         None => entry_ptr,
                         Some(ptr) => ptr,
@@ -177,13 +177,13 @@ impl<V> Table<V> {
     ///
     /// ## Safety
     ///
-    /// `capacity` must be larger than 0, otherwise, it's undefined behaviour.
+    /// `capacity` must be larger than 0, otherwise, it's undefined behavior.
     unsafe fn alloc(capacity: usize) -> NonNull<Entry<V>> {
         // SAFETY: The caller of this function must ensure that `capacity` is larger than 0.
         let ptr: *mut Entry<V> = unsafe { alloc::alloc(Self::entries_layout(capacity)).cast() };
         for i in 0..capacity {
             // SAFETY: We only access pointers in the range of `ptr` and `ptr + capacity`.
-            unsafe { ptr.add(i).write(Entry::Vaccant) };
+            unsafe { ptr.add(i).write(Entry::Vacant) };
         }
         // SAFETY: We just allocated, thus `ptr` must be non-null.
         unsafe { NonNull::new_unchecked(ptr) }
@@ -229,7 +229,7 @@ impl<V> Drop for Table<V> {
 
 #[derive(Debug)]
 enum Entry<V> {
-    Vaccant,
+    Vacant,
     Tombstone,
     Occupied(EntryInner<V>),
 }
