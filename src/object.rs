@@ -408,9 +408,9 @@ impl ObjClass {
         if self.name.mark() {
             grey_objects.push(Object::String(self.name));
         }
-        for (k, v) in self.methods.iter() {
+        for (k, v) in &self.methods {
             if k.mark() {
-                grey_objects.push(Object::String(k));
+                grey_objects.push(Object::String(*k));
             }
             if v.mark() {
                 grey_objects.push(Object::Closure(*v));
@@ -452,9 +452,9 @@ impl ObjInstance {
         if self.class.mark() {
             grey_objects.push(Object::Class(self.class))
         }
-        for (k, v) in self.fields.iter() {
+        for (k, v) in &self.fields {
             if k.mark() {
-                grey_objects.push(Object::String(k));
+                grey_objects.push(Object::String(*k));
             }
             if let Value::Object(obj) = v {
                 obj.mark(grey_objects);

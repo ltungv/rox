@@ -364,8 +364,8 @@ impl VirtualMachine {
             .as_class()
             .map_err(|_| RuntimeError::InvalidSuperclass)?;
         let subclass = self.stack_top(0).as_class()?;
-        for (method_name, method) in superclass.borrow().methods.iter() {
-            subclass.borrow_mut().methods.set(method_name, *method);
+        for (method_name, method) in &superclass.borrow().methods {
+            subclass.borrow_mut().methods.set(*method_name, *method);
         }
         self.stack_pop();
         Ok(())
@@ -831,9 +831,9 @@ impl VirtualMachine {
                 self.grey_objects.push(Object::Upvalue(*upvalue));
             }
         }
-        for (k, v) in self.globals.iter() {
+        for (k, v) in &self.globals {
             if k.mark() {
-                self.grey_objects.push(Object::String(k))
+                self.grey_objects.push(Object::String(*k))
             }
             if let Value::Object(o) = v {
                 o.mark(&mut self.grey_objects);

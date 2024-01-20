@@ -92,16 +92,6 @@ impl<V> Table<V> {
         }
     }
 
-    /// Get the iterator over all entries in the table.
-    pub fn iter(&self) -> TableIter<'_, V> {
-        TableIter {
-            ptr: self.ptr,
-            ptr_: PhantomData,
-            offset: 0,
-            capacity: self.capacity,
-        }
-    }
-
     /// Get a shared reference the entry associated with the given key.
     fn find_entry(&self, key: RefString) -> &Entry<V> {
         // SAFETY: We make sure `probe` always returns a valid and initialized pointer.
@@ -209,6 +199,21 @@ impl<V> Table<V> {
     }
 }
 
+impl<'table, V> IntoIterator for &'table Table<V> {
+    type Item = (&'table RefString, &'table V);
+
+    type IntoIter = TableIter<'table, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Self::IntoIter {
+            ptr: self.ptr,
+            ptr_: PhantomData,
+            offset: 0,
+            capacity: self.capacity,
+        }
+    }
+}
+
 impl<V> Default for Table<V> {
     fn default() -> Self {
         Self {
@@ -248,7 +253,7 @@ pub struct TableIter<'table, V> {
 }
 
 impl<'table, V> Iterator for TableIter<'table, V> {
-    type Item = (RefString, &'table V);
+    type Item = (&'table RefString, &'table V);
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.offset < self.capacity {
@@ -258,7 +263,7 @@ impl<'table, V> Iterator for TableIter<'table, V> {
             let entry = unsafe { &*self.ptr.as_ptr().add(self.offset) };
             self.offset += 1;
             if let Entry::Occupied(x) = entry {
-                return Some((x.key, &x.val));
+                return Some((&x.key, &x.val));
             }
         }
         None
