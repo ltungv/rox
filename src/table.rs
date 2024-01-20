@@ -192,7 +192,7 @@ impl<V> Table<V> {
 
     /// Return the memory layout of an array of `Entry<V>` with the given capacity.
     fn entries_layout(cap: usize) -> alloc::Layout {
-        alloc::Layout::array::<Entry<V>>(cap).expect("Invalid layout.")
+        alloc::Layout::array::<Entry<V>>(cap).expect("invalid layout.")
     }
 }
 

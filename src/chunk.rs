@@ -139,7 +139,7 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
             let constant = unsafe { chunk.constants.at(constant_id) };
             offset += 1;
             println!("{:-16} {constant_id:4} {constant}", "OP_CLOSURE");
-            let fun = constant.as_fun().expect("Expect function object.");
+            let fun = constant.as_fun().expect("expect function object.");
             let upvalue_count = fun.upvalue_count;
             for _ in 0..upvalue_count {
                 let is_local = chunk.instructions[offset + 1] == 1;

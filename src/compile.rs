@@ -124,7 +124,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit_return();
         let mut compiler = self.compilers.pop();
         compiler.fun.upvalue_count =
-            u16::try_from(compiler.upvalues.len()).expect("[bug] too many upvalues");
+            u16::try_from(compiler.upvalues.len()).expect("too many upvalues.");
 
         #[cfg(feature = "dbg-execution")]
         match &compiler.fun.name {
@@ -950,7 +950,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             }
         }
         self.consume(Kind::RParen, "Expect ')' after arguments.");
-        u8::try_from(argc).expect("[bug] too many arguments")
+        u8::try_from(argc).expect("too many arguments.")
     }
 
     /// Parse the 'this' keyword as a local variable.
@@ -1060,7 +1060,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                     self.error_prev("Can't read local variable in its own initializer.");
                 }
                 // Found a valid value for the variable.
-                return Some(u8::try_from(id).expect("[bug] too many local variables"));
+                return Some(u8::try_from(id).expect("too many local variables."));
             }
         }
         None
@@ -1103,7 +1103,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // Find an upvalue that references the same index.
         for (upval_index, upval) in self.compiler(height).upvalues.into_iter().enumerate() {
             if upval.index == index && upval.is_local == is_local {
-                return u8::try_from(upval_index).expect("[bug] too many upvalues");
+                return u8::try_from(upval_index).expect("too many upvalues.");
             }
         }
         let compiler = self.compiler_mut(height);
@@ -1115,7 +1115,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // Add the upvalue.
         let upvalue = Upvalue { is_local, index };
         compiler.upvalues.push(upvalue);
-        u8::try_from(upvalue_count).expect("[bug] too many upvalues")
+        u8::try_from(upvalue_count).expect("too many upvalues.")
     }
 
     /// Create a string literal and emit bytecodes to load it value.
@@ -1146,7 +1146,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///              | "(" expr ")" ;
     /// ```
     fn number(&mut self) {
-        let value = Value::Number(self.token_prev.lexeme.parse().expect("Expect digits."));
+        let value = Value::Number(self.token_prev.lexeme.parse().expect("expect digits."));
         self.emit_constant(value);
     }
 
@@ -1199,8 +1199,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         } else {
             let hi = (jump >> 8) & 0xff;
             let lo = jump & 0xff;
-            self.emit_byte(u8::try_from(hi).expect("[bug] invalid long jump range"));
-            self.emit_byte(u8::try_from(lo).expect("[bug] invalid long jump range"));
+            self.emit_byte(u8::try_from(hi).expect("invalid long jump range."));
+            self.emit_byte(u8::try_from(lo).expect("invalid long jump range."));
         }
     }
 
@@ -1234,9 +1234,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             let hi = (jump >> 8) & 0xff;
             let lo = jump & 0xff;
             self.compiler_mut(0).fun.chunk.instructions[offset] =
-                u8::try_from(hi).expect("[bug] invalid long jump range");
+                u8::try_from(hi).expect("invalid long jump range.");
             self.compiler_mut(0).fun.chunk.instructions[offset + 1] =
-                u8::try_from(lo).expect("[bug] invalid long jump range");
+                u8::try_from(lo).expect("invalid long jump range.");
         }
     }
 
@@ -1247,7 +1247,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             return 0;
         }
         let idx = self.compiler_mut(0).fun.chunk.write_constant(value);
-        u8::try_from(idx).expect("[bug] too many constants")
+        u8::try_from(idx).expect("too many constants.")
     }
 
     /// Start a new scope.

@@ -133,7 +133,7 @@ impl VirtualMachine {
             str_init,
         };
         vm.define_native("clock", 0, clock_native)
-            .expect("Can't define native function.");
+            .expect("can't define native function.");
         vm
     }
 }
@@ -194,11 +194,11 @@ impl VirtualMachine {
                 };
                 disassemble_instruction(
                     &frame.closure.fun.chunk,
-                    usize::try_from(offset).expect("[bug] invalid ip"),
+                    usize::try_from(offset).expect("invalid ip."),
                 );
             }
 
-            match Opcode::try_from(self.read_byte()).expect("[bug] invalid opcode") {
+            match Opcode::try_from(self.read_byte()).expect("invalid opcode.") {
                 Opcode::Const => self.constant()?,
                 Opcode::Nil => self.stack_push(Value::Nil)?,
                 Opcode::True => self.stack_push(Value::Bool(true))?,
@@ -923,7 +923,7 @@ impl VirtualMachine {
                         .ip
                         .offset_from(frame.closure.fun.chunk.instructions.as_ptr()),
                 )
-                .expect("[bug] invalid ip")
+                .expect("invalid ip.")
             };
             let line = frame.closure.fun.chunk.get_line(offset - 1);
             frame.closure.fun.name.as_ref().map_or_else(
@@ -1005,7 +1005,7 @@ fn clock_native(_args: &[Value]) -> Value {
     let start = std::time::SystemTime::now();
     let since_epoch = start
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("Time went backwards");
+        .expect("time went backwards.");
     Value::Number(since_epoch.as_secs_f64())
 }
 
