@@ -11,35 +11,35 @@ use crate::{chunk::Chunk, table::Table, value::Value};
 pub type RefString = Gc<ObjString>;
 
 /// A type alias for a heap-allocated upvalue.
-pub(crate) type RefUpvalue = Gc<RefCell<ObjUpvalue>>;
+pub type RefUpvalue = Gc<RefCell<ObjUpvalue>>;
 
 /// A type alias for a heap-allocated closure.
-pub(crate) type RefClosure = Gc<ObjClosure>;
+pub type RefClosure = Gc<ObjClosure>;
 
 /// A type alias for a heap-allocated fun.
-pub(crate) type RefFun = Gc<ObjFun>;
+pub type RefFun = Gc<ObjFun>;
 
 /// A type alias for a heap-allocated native fun.
-pub(crate) type RefNativeFun = Gc<ObjNativeFun>;
+pub type RefNativeFun = Gc<ObjNativeFun>;
 
 /// A type alias for a heap-allocated class definition.
-pub(crate) type RefClass = Gc<RefCell<ObjClass>>;
+pub type RefClass = Gc<RefCell<ObjClass>>;
 
 /// A type alias for a heap-allocated class instance.
-pub(crate) type RefInstance = Gc<RefCell<ObjInstance>>;
+pub type RefInstance = Gc<RefCell<ObjInstance>>;
 
 /// A type alias for a heap-allocated bound method.
-pub(crate) type RefBoundMethod = Gc<ObjBoundMethod>;
+pub type RefBoundMethod = Gc<ObjBoundMethod>;
 
 /// An enumeration of all potential errors that occur when working with objects.
 #[derive(Debug)]
-pub enum ObjectError {
+pub enum Error {
     InvalidCast,
 }
 
-impl error::Error for ObjectError {}
+impl error::Error for Error {}
 
-impl fmt::Display for ObjectError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidCast => write!(f, "Invalid cast."),
@@ -49,7 +49,7 @@ impl fmt::Display for ObjectError {
 
 /// A numeration of all object types.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Object {
+pub enum Object {
     /// A string object
     String(RefString),
     /// An upvalue object
@@ -70,7 +70,7 @@ pub(crate) enum Object {
 
 impl Object {
     /// Mark the current object reference and put it in `grey_objects` if its has not been marked.
-    pub(crate) fn mark(&self, grey_objects: &mut Vec<Object>) {
+    pub fn mark(&self, grey_objects: &mut Vec<Self>) {
         let marked = match self {
             Self::String(s) => s.mark(),
             Self::Upvalue(v) => v.mark(),
@@ -87,7 +87,7 @@ impl Object {
     }
 
     /// Unmark the object.
-    pub(crate) fn unmark(&self) {
+    pub fn unmark(&self) {
         match self {
             Self::String(s) => s.unmark(),
             Self::Upvalue(v) => v.unmark(),
@@ -101,7 +101,7 @@ impl Object {
     }
 
     /// Return whether the object is marked.
-    pub(crate) fn is_marked(&self) -> bool {
+    pub fn is_marked(&self) -> bool {
         match self {
             Self::String(s) => s.is_marked(),
             Self::Upvalue(v) => v.is_marked(),
@@ -116,20 +116,20 @@ impl Object {
 
     /// Mark all object references that can be directly access by the current object and put them
     /// in `grey_objects` if they have not been marked.
-    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+    pub fn mark_references(&self, grey_objects: &mut Vec<Self>) {
         match &self {
-            Object::Upvalue(upvalue) => upvalue.borrow().mark_references(grey_objects),
-            Object::Closure(closure) => closure.mark_references(grey_objects),
-            Object::Fun(fun) => fun.mark_references(grey_objects),
-            Object::Class(class) => class.borrow().mark_references(grey_objects),
-            Object::Instance(instance) => instance.borrow().mark_references(grey_objects),
-            Object::BoundMethod(method) => method.mark_references(grey_objects),
-            Object::String(_) | Object::NativeFun(_) => {}
+            Self::Upvalue(upvalue) => upvalue.borrow().mark_references(grey_objects),
+            Self::Closure(closure) => closure.mark_references(grey_objects),
+            Self::Fun(fun) => fun.mark_references(grey_objects),
+            Self::Class(class) => class.borrow().mark_references(grey_objects),
+            Self::Instance(instance) => instance.borrow().mark_references(grey_objects),
+            Self::BoundMethod(method) => method.mark_references(grey_objects),
+            Self::String(_) | Self::NativeFun(_) => {}
         }
     }
 
     /// Get the next object reference in the linked list.
-    pub(crate) fn get_next(&self) -> Option<Self> {
+    pub fn get_next(&self) -> Option<Self> {
         match self {
             Self::String(s) => s.get_next(),
             Self::Upvalue(v) => v.get_next(),
@@ -143,7 +143,7 @@ impl Object {
     }
 
     /// Set the next object reference in the linked list.
-    pub(crate) fn set_next(&self, next: Option<Object>) {
+    pub fn set_next(&self, next: Option<Self>) {
         match self {
             Self::String(s) => s.set_next(next),
             Self::Upvalue(v) => v.set_next(next),
@@ -157,7 +157,7 @@ impl Object {
     }
 
     #[cfg(feature = "dbg-heap")]
-    pub(crate) fn addr(&self) -> usize {
+    pub fn addr(&self) -> usize {
         match self {
             Self::String(s) => s.as_ptr() as usize,
             Self::Upvalue(v) => v.as_ptr() as usize,
@@ -174,14 +174,14 @@ impl Object {
 impl GcSized for Object {
     fn size(&self) -> usize {
         match self {
-            Object::String(s) => s.size(),
-            Object::Upvalue(v) => v.size(),
-            Object::Closure(c) => c.size(),
-            Object::Fun(fun) => fun.size(),
-            Object::NativeFun(fun) => fun.size(),
-            Object::Class(c) => c.size(),
-            Object::Instance(i) => i.size(),
-            Object::BoundMethod(m) => m.size(),
+            Self::String(s) => s.size(),
+            Self::Upvalue(v) => v.size(),
+            Self::Closure(c) => c.size(),
+            Self::Fun(fun) => fun.size(),
+            Self::NativeFun(fun) => fun.size(),
+            Self::Class(c) => c.size(),
+            Self::Instance(i) => i.size(),
+            Self::BoundMethod(m) => m.size(),
         }
     }
 }
@@ -189,14 +189,14 @@ impl GcSized for Object {
 impl fmt::Display for Object {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Object::String(s) => write!(f, "{}", ***s),
-            Object::Upvalue(v) => write!(f, "{}", (***v).borrow()),
-            Object::Closure(c) => write!(f, "{}", ***c),
-            Object::Fun(fun) => write!(f, "{}", ***fun),
-            Object::NativeFun(fun) => write!(f, "{}", ***fun),
-            Object::Class(c) => write!(f, "{}", (***c).borrow()),
-            Object::Instance(i) => write!(f, "{}", (***i).borrow()),
-            Object::BoundMethod(m) => write!(f, "{}", ***m),
+            Self::String(s) => write!(f, "{}", ***s),
+            Self::Upvalue(v) => write!(f, "{}", (***v).borrow()),
+            Self::Closure(c) => write!(f, "{}", ***c),
+            Self::Fun(fun) => write!(f, "{}", ***fun),
+            Self::NativeFun(fun) => write!(f, "{}", ***fun),
+            Self::Class(c) => write!(f, "{}", (***c).borrow()),
+            Self::Instance(i) => write!(f, "{}", (***i).borrow()),
+            Self::BoundMethod(m) => write!(f, "{}", ***m),
         }
     }
 }
@@ -204,16 +204,16 @@ impl fmt::Display for Object {
 /// The content of a heap-allocated string object.
 #[derive(Debug)]
 pub struct ObjString {
-    pub(crate) data: String,
-    pub(crate) hash: u32,
+    pub data: String,
+    pub hash: u32,
 }
 
 impl ObjString {
-    pub(crate) fn hash(s: &str) -> u32 {
-        let mut hash = 2166136261;
+    pub fn hash(s: &str) -> u32 {
+        let mut hash = 2_166_136_261;
         for b in s.bytes() {
-            hash = hash.bitxor(b as u32);
-            hash = hash.wrapping_mul(16777619);
+            hash = hash.bitxor(u32::from(b));
+            hash = hash.wrapping_mul(16_777_619);
         }
         hash
     }
@@ -241,16 +241,16 @@ impl fmt::Display for ObjString {
 
 /// The content of a heap-allocated closure object.
 #[derive(Debug)]
-pub(crate) struct ObjClosure {
+pub struct ObjClosure {
     // The function definition of this closure.
-    pub(crate) fun: RefFun,
+    pub fun: RefFun,
     // The variables captured by this closure.
-    pub(crate) upvalues: Vec<RefUpvalue>,
+    pub upvalues: Vec<RefUpvalue>,
 }
 
 impl ObjClosure {
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
         if self.fun.mark() {
             grey_objects.push(Object::Fun(self.fun));
         }
@@ -276,7 +276,7 @@ impl fmt::Display for ObjClosure {
 
 /// The content of an heap-allocated upvalue object.
 #[derive(Debug)]
-pub(crate) enum ObjUpvalue {
+pub enum ObjUpvalue {
     /// An open upvalue references a stack slot and represents a variable that has not been
     /// closed over.
     Open(usize),
@@ -287,8 +287,8 @@ pub(crate) enum ObjUpvalue {
 
 impl ObjUpvalue {
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
-        if let ObjUpvalue::Closed(Value::Object(obj)) = self {
+    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+        if let Self::Closed(Value::Object(obj)) = self {
             obj.mark(grey_objects);
         }
     }
@@ -308,20 +308,20 @@ impl fmt::Display for ObjUpvalue {
 
 /// The content of an heap-allocated function object.
 #[derive(Debug)]
-pub(crate) struct ObjFun {
+pub struct ObjFun {
     /// The name of the function
-    pub(crate) name: Option<RefString>,
+    pub name: Option<RefString>,
     /// Number of parameters the function has
-    pub(crate) arity: u8,
+    pub arity: u8,
     /// Number of upvalues captured by the function
-    pub(crate) upvalue_count: u8,
+    pub upvalue_count: u16,
     /// The bytecode chunk of this function
-    pub(crate) chunk: Chunk,
+    pub chunk: Chunk,
 }
 
 impl ObjFun {
     /// Create a new function object given its name.
-    pub(crate) fn new(name: Option<RefString>) -> Self {
+    pub fn new(name: Option<RefString>) -> Self {
         Self {
             name,
             arity: 0,
@@ -331,7 +331,7 @@ impl ObjFun {
     }
 
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
         if let Some(name) = self.name {
             if name.mark() {
                 grey_objects.push(Object::String(name));
@@ -361,11 +361,11 @@ impl fmt::Display for ObjFun {
 }
 
 /// The content of an heap-allocated native function object.
-pub(crate) struct ObjNativeFun {
+pub struct ObjNativeFun {
     /// Number of parameters
-    pub(crate) arity: u8,
+    pub arity: u8,
     /// Native function reference
-    pub(crate) call: fn(&[Value]) -> Value,
+    pub call: fn(&[Value]) -> Value,
 }
 
 impl GcSized for ObjNativeFun {
@@ -388,15 +388,15 @@ impl fmt::Debug for ObjNativeFun {
 
 /// The content of an heap-allocated class definition object.
 #[derive(Debug)]
-pub(crate) struct ObjClass {
+pub struct ObjClass {
     /// The name of the class.
-    pub(crate) name: RefString,
+    pub name: RefString,
     /// A the methods defined in the class.
-    pub(crate) methods: Table<RefClosure>,
+    pub methods: Table<RefClosure>,
 }
 
 impl ObjClass {
-    pub(crate) fn new(name: RefString) -> Self {
+    pub fn new(name: RefString) -> Self {
         Self {
             name,
             methods: Table::default(),
@@ -404,7 +404,7 @@ impl ObjClass {
     }
 
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
         if self.name.mark() {
             grey_objects.push(Object::String(self.name));
         }
@@ -433,14 +433,14 @@ impl fmt::Display for ObjClass {
 
 /// The content of an heap-allocated class instance object.
 #[derive(Debug)]
-pub(crate) struct ObjInstance {
-    pub(crate) class: RefClass,
-    pub(crate) fields: Table<Value>,
+pub struct ObjInstance {
+    pub class: RefClass,
+    pub fields: Table<Value>,
 }
 
 impl ObjInstance {
     /// Create a new class object given its name.
-    pub(crate) fn new(class: RefClass) -> Self {
+    pub fn new(class: RefClass) -> Self {
         Self {
             class,
             fields: Table::default(),
@@ -448,9 +448,9 @@ impl ObjInstance {
     }
 
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
         if self.class.mark() {
-            grey_objects.push(Object::Class(self.class))
+            grey_objects.push(Object::Class(self.class));
         }
         for (k, v) in &self.fields {
             if k.mark() {
@@ -477,19 +477,19 @@ impl fmt::Display for ObjInstance {
 
 /// The content of an heap-allocated bound method object.
 #[derive(Debug)]
-pub(crate) struct ObjBoundMethod {
-    pub(crate) receiver: Value,
-    pub(crate) method: RefClosure,
+pub struct ObjBoundMethod {
+    pub receiver: Value,
+    pub method: RefClosure,
 }
 
 impl ObjBoundMethod {
     /// Mark all object references that can be directly access by the current object.
-    pub(crate) fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
         if let Value::Object(o) = self.receiver {
             o.mark(grey_objects);
         }
         if self.method.mark() {
-            grey_objects.push(Object::Closure(self.method))
+            grey_objects.push(Object::Closure(self.method));
         }
     }
 }
@@ -516,6 +516,7 @@ impl<T: GcSized> GcSized for RefCell<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct GcData<T> {
     next: Cell<Option<Object>>,
     marked: Cell<bool>,
@@ -523,7 +524,7 @@ pub struct GcData<T> {
 }
 
 impl<T> GcData<T> {
-    pub(crate) fn new(next: Option<Object>, data: T) -> Self {
+    pub fn new(next: Option<Object>, data: T) -> Self {
         Self {
             next: Cell::new(next),
             marked: Cell::new(false),
@@ -531,19 +532,19 @@ impl<T> GcData<T> {
         }
     }
 
-    pub(crate) fn get_next(&self) -> Option<Object> {
+    pub fn get_next(&self) -> Option<Object> {
         self.next.get()
     }
 
-    pub(crate) fn set_next(&self, next: Option<Object>) {
+    pub fn set_next(&self, next: Option<Object>) {
         self.next.set(next);
     }
 
-    pub(crate) fn is_marked(&self) -> bool {
+    pub fn is_marked(&self) -> bool {
         self.marked.get()
     }
 
-    pub(crate) fn mark(&self) -> bool {
+    pub fn mark(&self) -> bool {
         if self.marked.get() {
             return false;
         }
@@ -551,8 +552,8 @@ impl<T> GcData<T> {
         true
     }
 
-    pub(crate) fn unmark(&self) {
-        self.marked.set(false)
+    pub fn unmark(&self) {
+        self.marked.set(false);
     }
 }
 
@@ -576,22 +577,22 @@ pub struct Gc<T> {
 }
 
 impl<T> Gc<T> {
-    pub(crate) fn new(boxed: Box<GcData<T>>) -> Self {
+    pub fn new(boxed: Box<GcData<T>>) -> Self {
         Self {
             ptr: NonNull::from(Box::leak(boxed)),
         }
     }
 
-    pub(crate) unsafe fn release(self) -> Box<GcData<T>> {
-        Box::from_raw(self.ptr.as_ptr())
+    pub unsafe fn release(self) {
+        let _ = Box::from_raw(self.ptr.as_ptr());
     }
 
-    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
-        self.ptr.eq(&other.ptr)
+    pub fn ptr_eq(lhs: Self, rhs: Self) -> bool {
+        lhs.ptr.eq(&rhs.ptr)
     }
 
     #[cfg(feature = "dbg-heap")]
-    pub(crate) fn as_ptr(&self) -> *const GcData<T> {
+    pub const fn as_ptr(&self) -> *const GcData<T> {
         self.ptr.as_ptr()
     }
 }

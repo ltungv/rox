@@ -3,7 +3,7 @@
 use std::{
     cell::RefCell,
     error, fmt,
-    ops::{Add, Deref, DerefMut, Div, Mul, Neg, Not, Sub},
+    ops::{Add, Div, Mul, Neg, Not, Sub},
     ptr::NonNull,
 };
 
@@ -11,14 +11,14 @@ use crate::{
     compile::{Parser, MAX_FRAMES},
     heap::Heap,
     object::{
-        ObjBoundMethod, ObjClass, ObjClosure, ObjFun, ObjInstance, ObjNativeFun, ObjUpvalue,
-        Object, ObjectError, RefBoundMethod, RefClass, RefClosure, RefFun, RefInstance,
-        RefNativeFun, RefString, RefUpvalue,
+        self, ObjBoundMethod, ObjClass, ObjClosure, ObjFun, ObjInstance, ObjNativeFun, ObjUpvalue,
+        Object, RefBoundMethod, RefClass, RefClosure, RefFun, RefInstance, RefNativeFun, RefString,
+        RefUpvalue,
     },
     opcode::Opcode,
     stack::Stack,
     table::Table,
-    value::{Value, ValueError},
+    value::{self, Value},
     InterpretError,
 };
 
@@ -32,9 +32,9 @@ const VM_STACK_SIZE: usize = 256;
 #[derive(Debug)]
 pub enum RuntimeError {
     /// Can't perform some operations given the current value(s).
-    Value(ValueError),
+    Value(value::Error),
     /// Can't perform some operations given the current object(s).
-    Object(ObjectError),
+    Object(object::Error),
     /// Overflow the virtual machine's stack.
     StackOverflow,
     /// Can't access a property.
@@ -82,19 +82,20 @@ impl fmt::Display for RuntimeError {
     }
 }
 
-impl From<ValueError> for RuntimeError {
-    fn from(err: ValueError) -> Self {
+impl From<value::Error> for RuntimeError {
+    fn from(err: value::Error) -> Self {
         Self::Value(err)
     }
 }
 
-impl From<ObjectError> for RuntimeError {
-    fn from(err: ObjectError) -> Self {
+impl From<object::Error> for RuntimeError {
+    fn from(err: object::Error) -> Self {
         Self::Object(err)
     }
 }
 
 /// A bytecode virtual machine for the Lox programming language.
+#[derive(Debug)]
 pub struct VirtualMachine {
     stack: Stack<Value, VM_STACK_SIZE>,
     frames: Stack<CallFrame, MAX_FRAMES>,
@@ -114,6 +115,10 @@ impl Default for VirtualMachine {
 
 impl VirtualMachine {
     /// Create a new virtual machine that prints to the given output.
+    ///
+    /// # Panics
+    ///
+    /// Panics if we can't define a native function for the virtual machine.
     pub fn new() -> Self {
         let mut heap = Heap::default();
         let str_init = heap.intern(String::from("init"));
@@ -135,14 +140,16 @@ impl VirtualMachine {
 
 impl VirtualMachine {
     /// Compile and execute the given source code.
+    ///
+    /// # Errors
+    ///
+    /// Return an error if the source code can't be compiled or if there's a runtime error.
     pub fn interpret(&mut self, src: &str) -> Result<(), InterpretError> {
         let parser = Parser::new(src, &mut self.heap);
         let fun = parser.compile().ok_or(InterpretError::Compile)?;
         self.run(fun).map_err(|err| {
             eprintln!("{err}");
-            if let Err(err) = self.trace_calls() {
-                eprintln!("{err}");
-            };
+            self.trace_calls();
             self.stack.clear();
             InterpretError::Runtime
         })
@@ -171,7 +178,7 @@ impl VirtualMachine {
         // Push the closure onto the stack so GC won't remove for the entire runtime.
         self.stack_push(Value::Object(closure_object))?;
         // Start running the closure.
-        self.call_closure(closure_ref, 0).and_then(|_| self.exec())
+        self.call_closure(closure_ref, 0).and_then(|()| self.exec())
     }
 
     fn exec(&mut self) -> Result<(), RuntimeError> {
@@ -185,10 +192,13 @@ impl VirtualMachine {
                         .ip
                         .offset_from(frame.closure.fun.chunk.instructions.as_ptr())
                 };
-                disassemble_instruction(&frame.closure.fun.chunk, offset as usize);
+                disassemble_instruction(
+                    &frame.closure.fun.chunk,
+                    usize::try_from(offset).expect("[bug] invalid ip"),
+                );
             }
 
-            match Opcode::from(self.read_byte()?) {
+            match Opcode::try_from(self.read_byte()).expect("[bug] invalid opcode") {
                 Opcode::Const => self.constant()?,
                 Opcode::Nil => self.stack_push(Value::Nil)?,
                 Opcode::True => self.stack_push(Value::Bool(true))?,
@@ -197,17 +207,17 @@ impl VirtualMachine {
                     self.stack_pop();
                 }
                 Opcode::GetLocal => self.get_local()?,
-                Opcode::SetLocal => self.set_local()?,
+                Opcode::SetLocal => self.set_local(),
                 Opcode::GetGlobal => self.get_global()?,
                 Opcode::SetGlobal => self.set_global()?,
                 Opcode::DefineGlobal => self.define_global()?,
                 Opcode::GetUpvalue => self.get_upvalue()?,
-                Opcode::SetUpvalue => self.set_upvalue()?,
+                Opcode::SetUpvalue => self.set_upvalue(),
                 Opcode::GetProperty => self.get_property()?,
                 Opcode::SetProperty => self.set_property()?,
                 Opcode::GetSuper => self.get_super()?,
-                Opcode::NE => self.ne()?,
-                Opcode::EQ => self.eq()?,
+                Opcode::NE => self.ne(),
+                Opcode::EQ => self.eq(),
                 Opcode::GT => self.gt()?,
                 Opcode::GE => self.ge()?,
                 Opcode::LT => self.lt()?,
@@ -216,18 +226,18 @@ impl VirtualMachine {
                 Opcode::Sub => self.sub()?,
                 Opcode::Mul => self.mul()?,
                 Opcode::Div => self.div()?,
-                Opcode::Not => self.not()?,
+                Opcode::Not => self.not(),
                 Opcode::Neg => self.neg()?,
-                Opcode::Print => self.print()?,
-                Opcode::Jump => self.jump(JumpDirection::Forward)?,
-                Opcode::JumpIfTrue => self.jump_if_true()?,
-                Opcode::JumpIfFalse => self.jump_if_false()?,
-                Opcode::Loop => self.jump(JumpDirection::Backward)?,
+                Opcode::Print => self.print(),
+                Opcode::Jump => self.jump(JumpDirection::Forward),
+                Opcode::JumpIfTrue => self.jump_if_true(),
+                Opcode::JumpIfFalse => self.jump_if_false(),
+                Opcode::Loop => self.jump(JumpDirection::Backward),
                 Opcode::Call => self.call()?,
                 Opcode::Invoke => self.invoke()?,
                 Opcode::SuperInvoke => self.super_invoke()?,
                 Opcode::Closure => self.closure()?,
-                Opcode::CloseUpvalue => self.close_upvalue()?,
+                Opcode::CloseUpvalue => self.close_upvalue(),
                 Opcode::Ret => {
                     if self.ret()? {
                         break;
@@ -242,8 +252,8 @@ impl VirtualMachine {
     }
 
     fn super_invoke(&mut self) -> Result<(), RuntimeError> {
-        let method = self.read_constant()?.as_string()?;
-        let argc = self.read_byte()?;
+        let method = self.read_constant().as_string()?;
+        let argc = self.read_byte();
 
         let superclass = self.stack_pop().as_class()?;
         self.invoke_from_class(superclass, method, argc)?;
@@ -251,8 +261,8 @@ impl VirtualMachine {
     }
 
     fn invoke(&mut self) -> Result<(), RuntimeError> {
-        let method = self.read_constant()?.as_string()?;
-        let argc = self.read_byte()?;
+        let method = self.read_constant().as_string()?;
+        let argc = self.read_byte();
 
         let receiver = self.stack_top(argc as usize);
         let instance = receiver
@@ -287,7 +297,7 @@ impl VirtualMachine {
     // Bind a method to a class definition. At this moment, a closure object should be the top most
     // item in the stack, and a class definition object should be the second top most item.
     fn method(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant().as_string()?;
         let closure = self.stack_pop().as_closure()?;
         let class = self.stack_top(0).as_class()?;
         class.borrow_mut().methods.set(name, closure);
@@ -310,7 +320,7 @@ impl VirtualMachine {
     }
 
     fn get_property(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant().as_string()?;
         let instance = self
             .stack_top(0)
             .as_instance()
@@ -329,7 +339,7 @@ impl VirtualMachine {
     }
 
     fn set_property(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant().as_string()?;
         let value = self.stack_pop();
         let instance = self
             .stack_top(0)
@@ -343,7 +353,7 @@ impl VirtualMachine {
     }
 
     fn get_super(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant().as_string()?;
         let superclass = self.stack_pop().as_class()?;
         if !self.bind_method(superclass, name)? {
             return Err(RuntimeError::UndefinedProperty(name.to_string()));
@@ -352,7 +362,7 @@ impl VirtualMachine {
     }
 
     fn class(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant().as_string()?;
         let (class, _) = self.alloc_class(ObjClass::new(name));
         self.stack_push(Value::Object(class))?;
         Ok(())
@@ -373,7 +383,7 @@ impl VirtualMachine {
 
     /// Get the value of the variable capture by an upvalue.
     fn get_upvalue(&mut self) -> Result<(), RuntimeError> {
-        let upvalue_slot = self.read_byte()?;
+        let upvalue_slot = self.read_byte();
         let upvalue = self.frame().closure.upvalues[upvalue_slot as usize];
         match *upvalue.borrow() {
             // Value is on the stack.
@@ -392,12 +402,12 @@ impl VirtualMachine {
     }
 
     /// Set the value of the variable capture by an upvalue.
-    fn set_upvalue(&mut self) -> Result<(), RuntimeError> {
-        let upvalue_slot = self.read_byte()?;
+    fn set_upvalue(&mut self) {
+        let upvalue_slot = self.read_byte();
         let value = *self.stack_top(0);
         let stack_slot = {
             let mut upvalue = self.frame().closure.upvalues[upvalue_slot as usize].borrow_mut();
-            match upvalue.deref_mut() {
+            match &mut *upvalue {
                 // Value is on the stack.
                 ObjUpvalue::Open(stack_slot) => Some(*stack_slot),
                 // Value is on the heap.
@@ -412,17 +422,16 @@ impl VirtualMachine {
             let v = unsafe { self.stack.at_mut(slot) };
             *v = value;
         }
-        Ok(())
     }
 
     fn closure(&mut self) -> Result<(), RuntimeError> {
-        let fun = self.read_constant()?.as_fun()?;
+        let fun = self.read_constant().as_fun()?;
         let mut upvalues = Vec::with_capacity(fun.upvalue_count as usize);
         for _ in 0..fun.upvalue_count {
-            let is_local = self.read_byte()? == 1;
-            let index = self.read_byte()? as usize;
+            let is_local = self.read_byte() == 1;
+            let index = self.read_byte() as usize;
             if is_local {
-                upvalues.push(self.capture_upvalue(self.frame().slot + index)?);
+                upvalues.push(self.capture_upvalue(self.frame().slot + index));
             } else {
                 upvalues.push(self.frame().closure.upvalues[index]);
             }
@@ -434,33 +443,32 @@ impl VirtualMachine {
         Ok(())
     }
 
-    fn close_upvalue(&mut self) -> Result<(), RuntimeError> {
-        self.close_upvalues(self.stack.len() - 1)?;
+    fn close_upvalue(&mut self) {
+        self.close_upvalues(self.stack.len() - 1);
         self.stack_pop();
-        Ok(())
     }
 
     /// Create an open upvalue capturing the variable at the stack index given by `location`.
-    fn capture_upvalue(&mut self, location: usize) -> Result<RefUpvalue, RuntimeError> {
+    fn capture_upvalue(&mut self, location: usize) -> RefUpvalue {
         // Check if there's an existing open upvalues that references the same stack slot. We want
         // to close over a variable not a value. Thus, closures can shared data through the same
         // captured variable.
-        for upvalue in self.open_upvalues.iter() {
+        for upvalue in &self.open_upvalues {
             if let ObjUpvalue::Open(loc) = *upvalue.borrow() {
                 if loc == location {
-                    return Ok(*upvalue);
+                    return *upvalue;
                 }
             }
         }
         // Make a new open upvalue.
         let (_, upvalue_ref) = self.alloc_upvalue(ObjUpvalue::Open(location));
         self.open_upvalues.push(upvalue_ref);
-        Ok(upvalue_ref)
+        upvalue_ref
     }
 
     // Close all upvalues whose referenced stack slot went out of scope. Here, `last` is the lowest
     // stack slot that went out of scope.
-    fn close_upvalues(&mut self, last: usize) -> Result<(), RuntimeError> {
+    fn close_upvalues(&mut self, last: usize) {
         for upvalue in &self.open_upvalues {
             // Check if we reference a slot that went out of scope.
             let mut upvalue = upvalue.borrow_mut();
@@ -477,8 +485,7 @@ impl VirtualMachine {
         }
         // remove closed upvalues from list of open upvalues
         self.open_upvalues
-            .retain(|v| matches!(v.borrow().deref(), ObjUpvalue::Open(_)));
-        Ok(())
+            .retain(|v| matches!(&*v.borrow(), ObjUpvalue::Open(_)));
     }
 
     /// Return from a function call
@@ -488,7 +495,7 @@ impl VirtualMachine {
         // The compiler didn't emit Opcode::CloseUpvalue at the end of each of the outer most scope
         // that defines the body. That scope contains function parameters and also local variables
         // that need to be closed over.
-        self.close_upvalues(self.frame().slot)?;
+        self.close_upvalues(self.frame().slot);
         let frame = self.frames_pop();
         if self.frames.len() == 0 {
             // Have reach the end of the script if there's no stack frame left.
@@ -503,7 +510,7 @@ impl VirtualMachine {
     }
 
     fn call(&mut self) -> Result<(), RuntimeError> {
-        let argc = self.read_byte()?;
+        let argc = self.read_byte();
         let v = self.stack_top(argc as usize);
         self.call_value(*v, argc)?;
         Ok(())
@@ -576,8 +583,8 @@ impl VirtualMachine {
         Ok(())
     }
 
-    fn jump(&mut self, direction: JumpDirection) -> Result<(), RuntimeError> {
-        let offset = self.read_short()?;
+    fn jump(&mut self, direction: JumpDirection) {
+        let offset = self.read_short();
         let frame = self.frame_mut();
         unsafe {
             match direction {
@@ -585,32 +592,29 @@ impl VirtualMachine {
                 JumpDirection::Backward => frame.ip = frame.ip.sub(offset as usize),
             }
         }
-        Ok(())
     }
 
-    fn jump_if_true(&mut self) -> Result<(), RuntimeError> {
-        let offset = self.read_short()?;
+    fn jump_if_true(&mut self) {
+        let offset = self.read_short();
         let val = self.stack_top(0);
         if val.is_truthy() {
             let frame = self.frame_mut();
             frame.ip = unsafe { frame.ip.add(offset as usize) };
         }
-        Ok(())
     }
 
-    fn jump_if_false(&mut self) -> Result<(), RuntimeError> {
-        let offset = self.read_short()?;
+    fn jump_if_false(&mut self) {
+        let offset = self.read_short();
         let val = self.stack_top(0);
         if val.is_falsey() {
             let frame = self.frame_mut();
             frame.ip = unsafe { frame.ip.add(offset as usize) };
         }
-        Ok(())
     }
 
     /// Get a local variable.
     fn get_local(&mut self) -> Result<(), RuntimeError> {
-        let slot = self.read_byte()? as usize;
+        let slot = self.read_byte() as usize;
         let frame_slot = self.frame().slot;
         // SAFETY: The compiler should produce safe code that access a safe part of the stack.
         let value = unsafe { self.stack.at(frame_slot + slot) };
@@ -619,19 +623,18 @@ impl VirtualMachine {
     }
 
     /// Set a local variable.
-    fn set_local(&mut self) -> Result<(), RuntimeError> {
-        let slot = self.read_byte()? as usize;
+    fn set_local(&mut self) {
+        let slot = self.read_byte() as usize;
         let frame_slot = self.frame().slot;
         let value = *self.stack_top(0);
         // SAFETY: The compiler should produce safe code that access a safe part of the stack.
         let v = unsafe { self.stack.at_mut(frame_slot + slot) };
         *v = value;
-        Ok(())
     }
 
     /// Get a global variable or return a runtime error if it was not found.
     fn get_global(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant().as_string()?;
         let value = self
             .globals
             .get(name)
@@ -642,7 +645,7 @@ impl VirtualMachine {
 
     /// Set a global variable or return a runtime error if it was not found.
     fn set_global(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant().as_string()?;
         let value = self.stack_top(0);
         if self.globals.get(name).is_none() {
             return Err(RuntimeError::UndefinedVariable(name.to_string()));
@@ -653,7 +656,7 @@ impl VirtualMachine {
 
     /// Declare a variable with some initial value.
     fn define_global(&mut self) -> Result<(), RuntimeError> {
-        let name = self.read_constant()?.as_string()?;
+        let name = self.read_constant().as_string()?;
         let value = self.stack_pop();
         self.globals.set(name, value);
         Ok(())
@@ -661,23 +664,21 @@ impl VirtualMachine {
 
     /// Read the constant id from the next byte and load the constant with the found id.
     fn constant(&mut self) -> Result<(), RuntimeError> {
-        let constant = self.read_constant()?;
+        let constant = self.read_constant();
         self.stack_push(constant)?;
         Ok(())
     }
 
-    fn ne(&mut self) -> Result<(), RuntimeError> {
+    fn ne(&mut self) {
         let rhs = self.stack_pop();
         let lhs = self.stack_top_mut(0);
         *lhs = Value::Bool((*lhs).ne(&rhs));
-        Ok(())
     }
 
-    fn eq(&mut self) -> Result<(), RuntimeError> {
+    fn eq(&mut self) {
         let rhs = self.stack_pop();
         let lhs = self.stack_top_mut(0);
         *lhs = Value::Bool((*lhs).eq(&rhs));
-        Ok(())
     }
 
     fn gt(&mut self) -> Result<(), RuntimeError> {
@@ -713,7 +714,7 @@ impl VirtualMachine {
         // deallocate the objects when we allocate a new object for the result.
         let rhs = self.stack_top(0);
         let lhs = self.stack_top(1);
-        let res = match (*lhs, rhs) {
+        let result = match (*lhs, rhs) {
             // Operations on objects might allocate a new one.
             (Value::Object(o1), Value::Object(o2)) => match (o1, o2) {
                 (Object::String(s1), Object::String(s2)) => {
@@ -725,7 +726,7 @@ impl VirtualMachine {
                 }
                 _ => {
                     return Err(RuntimeError::Value(
-                        ValueError::BinaryOperandsMustBeNumbersOrStrings,
+                        value::Error::BinaryOperandsMustBeNumbersOrStrings,
                     ))
                 }
             },
@@ -735,7 +736,7 @@ impl VirtualMachine {
         // Remove the RHS.
         self.stack_pop();
         // Update the LHS.
-        *self.stack_top_mut(0) = res;
+        *self.stack_top_mut(0) = result;
         Ok(())
     }
 
@@ -760,10 +761,9 @@ impl VirtualMachine {
         Ok(())
     }
 
-    fn not(&mut self) -> Result<(), RuntimeError> {
+    fn not(&mut self) {
         let v = self.stack_top_mut(0);
         *v = v.not();
-        Ok(())
     }
 
     fn neg(&mut self) -> Result<(), RuntimeError> {
@@ -772,10 +772,9 @@ impl VirtualMachine {
         Ok(())
     }
 
-    fn print(&mut self) -> Result<(), RuntimeError> {
+    fn print(&mut self) {
         let val = self.stack_pop();
         println!("{val}");
-        Ok(())
     }
 
     fn gc(&mut self) {
@@ -804,7 +803,7 @@ impl VirtualMachine {
     fn mark_sweep(&mut self) {
         self.mark_roots();
         while let Some(grey_object) = self.grey_objects.pop() {
-            grey_object.mark_references(&mut self.grey_objects)
+            grey_object.mark_references(&mut self.grey_objects);
         }
         // SAFETY: We make sure that the sweep step has correctly mark all reachable objects, so
         // sweep can be run safely.
@@ -833,7 +832,7 @@ impl VirtualMachine {
         }
         for (k, v) in &self.globals {
             if k.mark() {
-                self.grey_objects.push(Object::String(*k))
+                self.grey_objects.push(Object::String(*k));
             }
             if let Value::Object(o) = v {
                 o.mark(&mut self.grey_objects);
@@ -842,14 +841,14 @@ impl VirtualMachine {
     }
 
     /// Read the next byte in the stream of bytecode instructions.
-    fn read_byte(&mut self) -> Result<u8, RuntimeError> {
+    fn read_byte(&mut self) -> u8 {
         // SAFETY: The compiler should produce correct byte codes
         // so we never read an out-of-bound index.
         unsafe { self.frame_mut().read_byte() }
     }
 
     /// Read the next 2 bytes in the stream of bytecode instructions.
-    fn read_short(&mut self) -> Result<u16, RuntimeError> {
+    fn read_short(&mut self) -> u16 {
         // SAFETY: The compiler should produce correct byte codes
         // so we never read an out-of-bound index.
         unsafe { self.frame_mut().read_short() }
@@ -857,13 +856,13 @@ impl VirtualMachine {
 
     /// Read the next byte in the stream of bytecode instructions and return the constant at the
     /// index given by the byte.
-    fn read_constant(&mut self) -> Result<Value, RuntimeError> {
+    fn read_constant(&mut self) -> Value {
         // SAFETY: The compiler should produce correct byte codes
         // so we never read an out-of-bound index.
         unsafe { self.frame_mut().read_constant() }
     }
 
-    fn frame(&self) -> &CallFrame {
+    const fn frame(&self) -> &CallFrame {
         unsafe { self.current_frame.as_ref() }
     }
 
@@ -916,21 +915,22 @@ impl VirtualMachine {
         self.stack.remove(n);
     }
 
-    fn trace_calls(&self) -> Result<(), RuntimeError> {
+    fn trace_calls(&self) {
         for frame in self.frames.into_iter().rev() {
             let offset = unsafe {
-                frame
-                    .ip
-                    .offset_from(frame.closure.fun.chunk.instructions.as_ptr())
-                    as usize
+                usize::try_from(
+                    frame
+                        .ip
+                        .offset_from(frame.closure.fun.chunk.instructions.as_ptr()),
+                )
+                .expect("[bug] invalid ip")
             };
             let line = frame.closure.fun.chunk.get_line(offset - 1);
-            match &frame.closure.fun.name {
-                None => eprintln!("{line} in script."),
-                Some(s) => eprintln!("{line} in {}().", s.data),
-            }
+            frame.closure.fun.name.as_ref().map_or_else(
+                || eprintln!("{line} in script."),
+                |s| eprintln!("{line} in {}().", s.data),
+            );
         }
-        Ok(())
     }
 
     fn define_native(
@@ -994,7 +994,7 @@ impl VirtualMachine {
     #[cfg(feature = "dbg-execution")]
     fn trace_stack(&self) {
         print!("          ");
-        for value in self.stack.into_iter() {
+        for value in &self.stack {
             print!("[ {value} ]");
         }
         println!();
@@ -1018,32 +1018,33 @@ struct CallFrame {
 
 impl CallFrame {
     /// Read the next byte in the stream of bytecode instructions.
-    unsafe fn read_byte(&mut self) -> Result<u8, RuntimeError> {
+    unsafe fn read_byte(&mut self) -> u8 {
         let byte = *self.ip;
         self.ip = self.ip.add(1);
-        Ok(byte)
+        byte
     }
 
     /// Read the next 2 bytes in the stream of bytecode instructions.
-    unsafe fn read_short(&mut self) -> Result<u16, RuntimeError> {
-        let hi = *self.ip as u16;
-        let lo = *self.ip.add(1) as u16;
+    unsafe fn read_short(&mut self) -> u16 {
+        let hi = u16::from(*self.ip);
+        let lo = u16::from(*self.ip.add(1));
         self.ip = self.ip.add(2);
-        Ok(hi << 8 | lo)
+        hi << 8 | lo
     }
 
     /// Read the next byte in the stream of bytecode instructions and return the constant at the
     /// index given by the byte.
-    unsafe fn read_constant(&mut self) -> Result<Value, RuntimeError> {
+    unsafe fn read_constant(&mut self) -> Value {
         let constant_id = *self.ip;
         self.ip = self.ip.add(1);
-        Ok(*self.closure.fun.chunk.constants.at(constant_id as usize))
+        *self.closure.fun.chunk.constants.at(constant_id as usize)
     }
 }
 
 /// An enumeration that determine whether to jump forward or backward along the stream of
 /// bytecode instructions.
-pub(crate) enum JumpDirection {
+#[derive(Clone, Copy)]
+pub enum JumpDirection {
     /// Jump forward.
     Forward,
     /// Jump backward.

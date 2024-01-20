@@ -3,16 +3,16 @@ use std::{cmp::Ordering, error, fmt, ops};
 use crate::object::{Gc, Object, RefClass, RefClosure, RefFun, RefInstance, RefString};
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum ValueError {
+pub enum Error {
     UnaryOperandsMustBeNumber,
     BinaryOperandsMustBeNumbers,
     BinaryOperandsMustBeNumbersOrStrings,
     InvalidCast,
 }
 
-impl error::Error for ValueError {}
+impl error::Error for Error {}
 
-impl fmt::Display for ValueError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnaryOperandsMustBeNumber => write!(f, "Operand must be a number."),
@@ -27,7 +27,7 @@ impl fmt::Display for ValueError {
 
 /// A enumeration of all supported primitive types in Lox and their underlying value.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Value {
+pub enum Value {
     /// A nothing value in Lox
     Nil,
     /// A boolean value in Lox
@@ -40,92 +40,92 @@ pub(crate) enum Value {
 
 impl Value {
     /// Cast the object as a string.
-    pub(crate) fn as_string(&self) -> Result<RefString, ValueError> {
+    pub const fn as_string(&self) -> Result<RefString, Error> {
         if let Self::Object(Object::String(s)) = self {
             Ok(*s)
         } else {
-            Err(ValueError::InvalidCast)
+            Err(Error::InvalidCast)
         }
     }
 
     /// Cast the object as a closure.
-    pub(crate) fn as_closure(&self) -> Result<RefClosure, ValueError> {
+    pub const fn as_closure(&self) -> Result<RefClosure, Error> {
         if let Self::Object(Object::Closure(c)) = self {
             Ok(*c)
         } else {
-            Err(ValueError::InvalidCast)
+            Err(Error::InvalidCast)
         }
     }
 
     /// Cast the object as a fun.
-    pub(crate) fn as_fun(&self) -> Result<RefFun, ValueError> {
+    pub const fn as_fun(&self) -> Result<RefFun, Error> {
         if let Self::Object(Object::Fun(f)) = self {
             Ok(*f)
         } else {
-            Err(ValueError::InvalidCast)
+            Err(Error::InvalidCast)
         }
     }
 
     /// Cast the object as a class.
-    pub(crate) fn as_class(&self) -> Result<RefClass, ValueError> {
+    pub const fn as_class(&self) -> Result<RefClass, Error> {
         if let Self::Object(Object::Class(c)) = self {
             Ok(*c)
         } else {
-            Err(ValueError::InvalidCast)
+            Err(Error::InvalidCast)
         }
     }
 
     /// Cast the object as an instance.
-    pub(crate) fn as_instance(&self) -> Result<RefInstance, ValueError> {
+    pub const fn as_instance(&self) -> Result<RefInstance, Error> {
         if let Self::Object(Object::Instance(i)) = self {
             Ok(*i)
         } else {
-            Err(ValueError::InvalidCast)
+            Err(Error::InvalidCast)
         }
     }
 
-    pub(crate) fn is_truthy(&self) -> bool {
+    pub const fn is_truthy(&self) -> bool {
         match self {
-            Value::Bool(b) => *b,
-            Value::Nil => false,
+            Self::Bool(b) => *b,
+            Self::Nil => false,
             _ => true,
         }
     }
 
-    pub(crate) fn is_falsey(&self) -> bool {
+    pub fn is_falsey(&self) -> bool {
         match self {
-            Value::Bool(b) => !b,
-            Value::Nil => true,
+            Self::Bool(b) => !b,
+            Self::Nil => true,
             _ => false,
         }
     }
 
-    pub(crate) fn lt(&self, other: &Self) -> Result<bool, ValueError> {
-        match self.partial_cmp(other) {
-            Some(order) => Ok(matches!(order, Ordering::Less)),
-            None => Err(ValueError::BinaryOperandsMustBeNumbers),
-        }
+    pub fn lt(&self, other: &Self) -> Result<bool, Error> {
+        self.partial_cmp(other)
+            .map_or(Err(Error::BinaryOperandsMustBeNumbers), |order| {
+                Ok(matches!(order, Ordering::Less))
+            })
     }
 
-    pub(crate) fn le(&self, other: &Self) -> Result<bool, ValueError> {
-        match self.partial_cmp(other) {
-            Some(order) => Ok(matches!(order, Ordering::Less | Ordering::Equal)),
-            None => Err(ValueError::BinaryOperandsMustBeNumbers),
-        }
+    pub fn le(&self, other: &Self) -> Result<bool, Error> {
+        self.partial_cmp(other)
+            .map_or(Err(Error::BinaryOperandsMustBeNumbers), |order| {
+                Ok(matches!(order, Ordering::Less | Ordering::Equal))
+            })
     }
 
-    pub(crate) fn gt(&self, other: &Self) -> Result<bool, ValueError> {
-        match self.partial_cmp(other) {
-            Some(order) => Ok(matches!(order, Ordering::Greater)),
-            None => Err(ValueError::BinaryOperandsMustBeNumbers),
-        }
+    pub fn gt(&self, other: &Self) -> Result<bool, Error> {
+        self.partial_cmp(other)
+            .map_or(Err(Error::BinaryOperandsMustBeNumbers), |order| {
+                Ok(matches!(order, Ordering::Greater))
+            })
     }
 
-    pub(crate) fn ge(&self, other: &Self) -> Result<bool, ValueError> {
-        match self.partial_cmp(other) {
-            Some(order) => Ok(matches!(order, Ordering::Greater | Ordering::Equal)),
-            None => Err(ValueError::BinaryOperandsMustBeNumbers),
-        }
+    pub fn ge(&self, other: &Self) -> Result<bool, Error> {
+        self.partial_cmp(other)
+            .map_or(Err(Error::BinaryOperandsMustBeNumbers), |order| {
+                Ok(matches!(order, Ordering::Greater | Ordering::Equal))
+            })
     }
 }
 
@@ -136,26 +136,26 @@ impl PartialEq for Value {
             (Self::Bool(v1), Self::Bool(v2)) => v1 == v2,
             (Self::Number(v1), Self::Number(v2)) => v1.eq(v2),
             (Self::Object(Object::String(s1)), Self::Object(Object::String(s2))) => {
-                Gc::ptr_eq(s1, s2)
+                Gc::ptr_eq(*s1, *s2)
             }
             (Self::Object(Object::Upvalue(v1)), Self::Object(Object::Upvalue(v2))) => {
-                Gc::ptr_eq(v1, v2)
+                Gc::ptr_eq(*v1, *v2)
             }
             (Self::Object(Object::Closure(v1)), Self::Object(Object::Closure(v2))) => {
-                Gc::ptr_eq(v1, v2)
+                Gc::ptr_eq(*v1, *v2)
             }
-            (Self::Object(Object::Fun(v1)), Self::Object(Object::Fun(v2))) => Gc::ptr_eq(v1, v2),
+            (Self::Object(Object::Fun(v1)), Self::Object(Object::Fun(v2))) => Gc::ptr_eq(*v1, *v2),
             (Self::Object(Object::NativeFun(v1)), Self::Object(Object::NativeFun(v2))) => {
-                Gc::ptr_eq(v1, v2)
+                Gc::ptr_eq(*v1, *v2)
             }
             (Self::Object(Object::Class(v1)), Self::Object(Object::Class(v2))) => {
-                Gc::ptr_eq(v1, v2)
+                Gc::ptr_eq(*v1, *v2)
             }
             (Self::Object(Object::Instance(v1)), Self::Object(Object::Instance(v2))) => {
-                Gc::ptr_eq(v1, v2)
+                Gc::ptr_eq(*v1, *v2)
             }
             (Self::Object(Object::BoundMethod(v1)), Self::Object(Object::BoundMethod(v2))) => {
-                Gc::ptr_eq(v1, v2)
+                Gc::ptr_eq(*v1, *v2)
             }
             _ => false,
         }
@@ -172,56 +172,56 @@ impl PartialOrd for Value {
 }
 
 impl ops::Add for &Value {
-    type Output = Result<Value, ValueError>;
+    type Output = Result<Value, Error>;
 
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 + n2)),
-            _ => Err(ValueError::BinaryOperandsMustBeNumbersOrStrings),
+            _ => Err(Error::BinaryOperandsMustBeNumbersOrStrings),
         }
     }
 }
 
 impl ops::Sub for &Value {
-    type Output = Result<Value, ValueError>;
+    type Output = Result<Value, Error>;
 
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 - n2)),
-            _ => Err(ValueError::BinaryOperandsMustBeNumbers),
+            _ => Err(Error::BinaryOperandsMustBeNumbers),
         }
     }
 }
 
 impl ops::Mul for &Value {
-    type Output = Result<Value, ValueError>;
+    type Output = Result<Value, Error>;
 
     fn mul(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 * n2)),
-            _ => Err(ValueError::BinaryOperandsMustBeNumbers),
+            _ => Err(Error::BinaryOperandsMustBeNumbers),
         }
     }
 }
 
 impl ops::Div for &Value {
-    type Output = Result<Value, ValueError>;
+    type Output = Result<Value, Error>;
 
     fn div(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(n1), Value::Number(n2)) => Ok(Value::Number(n1 / n2)),
-            _ => Err(ValueError::BinaryOperandsMustBeNumbers),
+            _ => Err(Error::BinaryOperandsMustBeNumbers),
         }
     }
 }
 
 impl ops::Neg for &Value {
-    type Output = Result<Value, ValueError>;
+    type Output = Result<Value, Error>;
 
     fn neg(self) -> Self::Output {
         match self {
             Value::Number(n) => Ok(Value::Number(-n)),
-            _ => Err(ValueError::UnaryOperandsMustBeNumber),
+            _ => Err(Error::UnaryOperandsMustBeNumber),
         }
     }
 }

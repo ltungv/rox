@@ -104,55 +104,57 @@ pub enum Opcode {
 
 impl From<Opcode> for u8 {
     fn from(op: Opcode) -> Self {
-        op as u8
+        op as Self
     }
 }
 
-impl From<u8> for Opcode {
-    fn from(byte: u8) -> Self {
-        match byte {
-            0 => Opcode::Const,
-            1 => Opcode::Nil,
-            2 => Opcode::True,
-            3 => Opcode::False,
-            4 => Opcode::Pop,
-            5 => Opcode::GetLocal,
-            6 => Opcode::SetLocal,
-            7 => Opcode::GetGlobal,
-            8 => Opcode::SetGlobal,
-            9 => Opcode::DefineGlobal,
-            10 => Opcode::GetUpvalue,
-            11 => Opcode::SetUpvalue,
-            12 => Opcode::GetProperty,
-            13 => Opcode::SetProperty,
-            14 => Opcode::GetSuper,
-            15 => Opcode::NE,
-            16 => Opcode::EQ,
-            17 => Opcode::GT,
-            18 => Opcode::GE,
-            19 => Opcode::LT,
-            20 => Opcode::LE,
-            21 => Opcode::Add,
-            22 => Opcode::Sub,
-            23 => Opcode::Mul,
-            24 => Opcode::Div,
-            25 => Opcode::Not,
-            26 => Opcode::Neg,
-            27 => Opcode::Print,
-            28 => Opcode::Jump,
-            29 => Opcode::JumpIfTrue,
-            30 => Opcode::JumpIfFalse,
-            31 => Opcode::Loop,
-            32 => Opcode::Call,
-            33 => Opcode::Invoke,
-            34 => Opcode::SuperInvoke,
-            35 => Opcode::Closure,
-            36 => Opcode::CloseUpvalue,
-            37 => Opcode::Ret,
-            38 => Opcode::Class,
-            39 => Opcode::Inherit,
-            40 => Opcode::Method,
-            b => panic!("Unknown byte-code '{b}'"),
-        }
+impl TryFrom<u8> for Opcode {
+    type Error = String;
+    fn try_from(byte: u8) -> Result<Self, Self::Error> {
+        let op = match byte {
+            0 => Self::Const,
+            1 => Self::Nil,
+            2 => Self::True,
+            3 => Self::False,
+            4 => Self::Pop,
+            5 => Self::GetLocal,
+            6 => Self::SetLocal,
+            7 => Self::GetGlobal,
+            8 => Self::SetGlobal,
+            9 => Self::DefineGlobal,
+            10 => Self::GetUpvalue,
+            11 => Self::SetUpvalue,
+            12 => Self::GetProperty,
+            13 => Self::SetProperty,
+            14 => Self::GetSuper,
+            15 => Self::NE,
+            16 => Self::EQ,
+            17 => Self::GT,
+            18 => Self::GE,
+            19 => Self::LT,
+            20 => Self::LE,
+            21 => Self::Add,
+            22 => Self::Sub,
+            23 => Self::Mul,
+            24 => Self::Div,
+            25 => Self::Not,
+            26 => Self::Neg,
+            27 => Self::Print,
+            28 => Self::Jump,
+            29 => Self::JumpIfTrue,
+            30 => Self::JumpIfFalse,
+            31 => Self::Loop,
+            32 => Self::Call,
+            33 => Self::Invoke,
+            34 => Self::SuperInvoke,
+            35 => Self::Closure,
+            36 => Self::CloseUpvalue,
+            37 => Self::Ret,
+            38 => Self::Class,
+            39 => Self::Inherit,
+            40 => Self::Method,
+            b => return Err(format!("Unknown byte-code '{b}'")),
+        };
+        Ok(op)
     }
 }

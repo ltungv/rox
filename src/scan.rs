@@ -2,16 +2,16 @@ use std::{error, fmt, ops};
 
 /// An enumeration of all the potential errors occur while scanning.
 #[derive(Debug)]
-pub enum ScanError {
+pub enum Error {
     /// A string literal is unterminated.
     UnterminatedString(Line),
     /// Encounter an unexpected character while scanning.
     UnexpectedCharacter(Line),
 }
 
-impl error::Error for ScanError {}
+impl error::Error for Error {}
 
-impl fmt::Display for ScanError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnterminatedString(line) => write!(f, "{line} Error: Unterminated string."),
@@ -21,7 +21,7 @@ impl fmt::Display for ScanError {
 }
 
 /// Scanner reads characters from the source code and groups them in to a sequence of tokens.
-pub(crate) struct Scanner<'src> {
+pub struct Scanner<'src> {
     /// The original source string used when we need to make references for the tokens' lexeme.
     src: &'src str,
     /// The number of the current line through which the scanner is going.
@@ -34,7 +34,7 @@ pub(crate) struct Scanner<'src> {
 
 impl<'src> Scanner<'src> {
     /// Create a new scanner for the given string.
-    pub(crate) fn new(src: &'src str) -> Self {
+    pub fn new(src: &'src str) -> Self {
         Self {
             src,
             line: Line::default(),
@@ -45,7 +45,7 @@ impl<'src> Scanner<'src> {
 
     /// Consume and return the next token from source. When there's no token left, subsequent calls
     /// will always return the EOF token.
-    pub(crate) fn scan(&mut self) -> Result<Token<'src>, ScanError> {
+    pub fn scan(&mut self) -> Result<Token<'src>, Error> {
         self.skip_whitespace();
         let c = match self.advance() {
             None => {
@@ -102,7 +102,7 @@ impl<'src> Scanner<'src> {
             n if Self::is_digit(n) => self.number(),
             c if Self::is_valid_ident(c) => self.identity(),
             _ => {
-                return Err(ScanError::UnexpectedCharacter(self.line));
+                return Err(Error::UnexpectedCharacter(self.line));
             }
         };
 
@@ -152,14 +152,14 @@ impl<'src> Scanner<'src> {
         self.make_token(Kind::Number)
     }
 
-    fn string(&mut self) -> Result<Token<'src>, ScanError> {
+    fn string(&mut self) -> Result<Token<'src>, Error> {
         // Go through all characters that are not a double-quote.
         while self.peek_check(|c| c != b'"') {
             self.advance();
         }
         // Check if we reach EOF or an actual double-quote.
         if self.peek().is_none() {
-            return Err(ScanError::UnterminatedString(self.line));
+            return Err(Error::UnterminatedString(self.line));
         }
         // Consume the terminating double-quote.
         self.advance();
@@ -192,13 +192,13 @@ impl<'src> Scanner<'src> {
     /// Return the result of applying the given function to the next character in the iterator
     /// without consuming it. Return false if there's no more item.
     fn peek_check<F: Fn(u8) -> bool>(&mut self, check: F) -> bool {
-        self.peek().map(check).unwrap_or(false)
+        self.peek().is_some_and(check)
     }
 
     /// Return the result of applying the given function to the character after the next one in
     /// the iterator without consuming them. Return false if there's no more item.
     fn peek_next_check<F: Fn(u8) -> bool>(&mut self, check: F) -> bool {
-        self.peek_next().map(check).unwrap_or(false)
+        self.peek_next().is_some_and(check)
     }
 
     /// Return the next character in the iterator without consuming it.
@@ -244,30 +244,30 @@ impl<'src> Scanner<'src> {
     }
 
     /// Return if the chracter is a valid ascii digit.
-    fn is_digit(c: u8) -> bool {
+    const fn is_digit(c: u8) -> bool {
         c.is_ascii_digit()
     }
 
     /// Return if the chracter is alphabetic.
-    fn is_valid_ident(c: u8) -> bool {
+    const fn is_valid_ident(c: u8) -> bool {
         c.is_ascii_alphabetic() || c == b'_'
     }
 }
 
 /// Implementation of tokens that are allowed in Lox.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Token<'src> {
+pub struct Token<'src> {
     /// The kind of token.
-    pub(crate) kind: Kind,
+    pub kind: Kind,
     /// The line in which this token was found.
-    pub(crate) line: Line,
+    pub line: Line,
     /// The string segment in source that corresponds to this token.
-    pub(crate) lexeme: &'src str,
+    pub lexeme: &'src str,
 }
 
 impl<'src> Token<'src> {
     /// Create a token of type Eof with position set to the default value
-    pub(crate) fn placeholder() -> Self {
+    pub fn placeholder() -> Self {
         Self {
             kind: Kind::Eof,
             line: Line::default(),
@@ -278,7 +278,7 @@ impl<'src> Token<'src> {
 
 /// Lox token types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Kind {
+pub enum Kind {
     /// Single character '('
     LParen,
     /// Single character ')'

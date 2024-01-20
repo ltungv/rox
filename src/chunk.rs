@@ -8,32 +8,32 @@ pub const MAX_CONSTANTS: usize = u8::MAX as usize + 1;
 
 /// A chunk holds a sequence of instructions to be executes and their data.
 #[derive(Debug, Default)]
-pub(crate) struct Chunk {
-    pub(crate) constants: Stack<Value, MAX_CONSTANTS>,
-    pub(crate) instructions: Vec<u8>,
+pub struct Chunk {
+    pub constants: Stack<Value, MAX_CONSTANTS>,
+    pub instructions: Vec<u8>,
     lines: Vec<RunLength<Line>>,
 }
 
 impl Chunk {
     /// Write an opcode into the chunk.
-    pub(crate) fn write(&mut self, opcode: Opcode, line: Line) {
-        self.write_byte(opcode.into(), line)
+    pub fn write(&mut self, opcode: Opcode, line: Line) {
+        self.write_byte(opcode.into(), line);
     }
 
     /// Write an arbitrarily byte into the chunk.
-    pub(crate) fn write_byte(&mut self, byte: u8, line: Line) {
+    pub fn write_byte(&mut self, byte: u8, line: Line) {
         self.instructions.push(byte);
         self.add_line(line);
     }
 
     /// Write a constant into the chunk.
-    pub(crate) fn write_constant(&mut self, value: Value) -> usize {
+    pub fn write_constant(&mut self, value: Value) -> usize {
         self.constants.push(value);
         self.constants.len() - 1
     }
 
     /// Get the line information of the bytecode at a specific offset.
-    pub(crate) fn add_line(&mut self, line: Line) {
+    pub fn add_line(&mut self, line: Line) {
         match self.lines.last_mut() {
             Some(last_line) if last_line.data == line => last_line.length += 1,
             _ => self.lines.push(RunLength::new(line)),
@@ -41,9 +41,9 @@ impl Chunk {
     }
 
     /// Get the line information of the bytecode at a specific offset.
-    pub(crate) fn get_line(&self, offset: usize) -> Line {
+    pub fn get_line(&self, offset: usize) -> Line {
         let mut length = 0;
-        for line in self.lines.iter() {
+        for line in &self.lines {
             length += line.length;
             if length > offset {
                 return line.data;
@@ -60,14 +60,14 @@ struct RunLength<T> {
 }
 
 impl<T> RunLength<T> {
-    fn new(data: T) -> Self {
+    const fn new(data: T) -> Self {
         Self { data, length: 1 }
     }
 }
 
 /// Go through the instructions in the chunk and display them in human-readable format.
 #[cfg(feature = "dbg-execution")]
-pub(crate) fn disassemble_chunk(chunk: &Chunk, name: &str) {
+pub fn disassemble(chunk: &Chunk, name: &str) {
     println!("== {name} ==");
     let mut offset = 0;
     while offset < chunk.instructions.len() {
@@ -77,7 +77,7 @@ pub(crate) fn disassemble_chunk(chunk: &Chunk, name: &str) {
 
 /// Display an instruction in human readable format.
 #[cfg(feature = "dbg-execution")]
-pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
+pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
     let line_current = chunk.get_line(offset);
     let line_previous = chunk.get_line(offset.saturating_sub(1));
     // Annotation for seperating instructions from different lines.
@@ -105,7 +105,7 @@ pub(crate) fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         Opcode::DefineGlobal => disassemble_constant(chunk, offset, "OP_DEFINE_GLOBAL"),
         Opcode::GetUpvalue => disassemble_byte(chunk, offset, "OP_GET_UPVALUE"),
         Opcode::SetUpvalue => disassemble_byte(chunk, offset, "OP_SET_UPVALUE"),
-        Opcode::GetProperty => disassemble_constant(chunk, offset, "OP_SET_PROPERTY"),
+        Opcode::GetProperty => disassemble_constant(chunk, offset, "OP_GET_PROPERTY"),
         Opcode::SetProperty => disassemble_constant(chunk, offset, "OP_SET_PROPERTY"),
         Opcode::GetSuper => disassemble_constant(chunk, offset, "OP_GET_SUPER"),
         Opcode::NE => disassemble_simple(offset, "OP_NE"),
@@ -186,8 +186,8 @@ fn disassemble_byte(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
 /// Display a jump instruction in human-readable format.
 #[cfg(feature = "dbg-execution")]
 fn disassemble_jump(chunk: &Chunk, offset: usize, dir: JumpDirection, name: &'static str) -> usize {
-    let hi = chunk.instructions[offset + 1] as u16;
-    let lo = chunk.instructions[offset + 2] as u16;
+    let hi = u16::from(chunk.instructions[offset + 1]);
+    let lo = u16::from(chunk.instructions[offset + 2]);
     let jump = hi << 8 | lo;
     let target = match dir {
         JumpDirection::Forward => offset + 3 + jump as usize,
@@ -203,7 +203,7 @@ fn disassemble_invoke(chunk: &Chunk, offset: usize, name: &'static str) -> usize
     let slot = chunk.instructions[offset + 1];
     let argc = chunk.instructions[offset + 2];
     // SAFETY: The compiler must work correctly.
-    let fname = unsafe { chunk.constants.at(slot as usize) };
-    println!("{name:-16} {slot:4} ({argc} args) {fname}",);
+    let file_name = unsafe { chunk.constants.at(slot as usize) };
+    println!("{name:-16} {slot:4} ({argc} args) {file_name}",);
     offset + 3
 }

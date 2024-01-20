@@ -4,7 +4,7 @@ use crate::object::{Gc, RefString};
 
 /// A hash table mapping from `RefString` to `V`. Conflicting keys are resolved using linear probing.
 #[derive(Debug)]
-pub(crate) struct Table<V> {
+pub struct Table<V> {
     ptr: NonNull<Entry<V>>,
     capacity: usize,
     occupants: usize,
@@ -13,13 +13,13 @@ pub(crate) struct Table<V> {
 
 impl<V> Table<V> {
     /// Get the number of entries that are currently stored in the table.
-    pub(crate) fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.occupants
     }
 
     /// Set the value associated with the given key.
     /// If the key is already present, the previous value is returned.
-    pub(crate) fn set(&mut self, key: RefString, val: V) -> Option<V> {
+    pub fn set(&mut self, key: RefString, val: V) -> Option<V> {
         if self.occupants + self.tombstones >= self.capacity * 3 / 4 {
             self.resize();
         }
@@ -40,7 +40,7 @@ impl<V> Table<V> {
 
     // Get the value associated with the given key.
     // If the key is not present, `None` is returned.
-    pub(crate) fn get(&self, key: RefString) -> Option<&V> {
+    pub fn get(&self, key: RefString) -> Option<&V> {
         if self.occupants == 0 {
             return None;
         }
@@ -53,7 +53,7 @@ impl<V> Table<V> {
 
     // Delete the value associated with the given key and return it.
     // If the key is not present, `None` is returned.
-    pub(crate) fn del(&mut self, key: RefString) -> Option<V> {
+    pub fn del(&mut self, key: RefString) -> Option<V> {
         if self.occupants == 0 {
             return None;
         }
@@ -69,7 +69,7 @@ impl<V> Table<V> {
 
     /// Find the pointer to the key that matches the given string and hash.
     // If no key matches, `None` is returned.
-    pub(crate) fn find(&self, s: &str, hash: u32) -> Option<RefString> {
+    pub fn find(&self, s: &str, hash: u32) -> Option<RefString> {
         if self.occupants == 0 {
             return None;
         }
@@ -85,7 +85,7 @@ impl<V> Table<V> {
                         return Some(e.key);
                     }
                 }
-                _ => {}
+                Entry::Tombstone => {}
             }
             // Linear probing.
             index = (index + 1) & (self.capacity - 1);
@@ -117,10 +117,7 @@ impl<V> Table<V> {
             let entry = unsafe { &*entry_ptr };
             match &entry {
                 Entry::Vacant => {
-                    return match tombstone {
-                        None => entry_ptr,
-                        Some(ptr) => ptr,
-                    }
+                    return tombstone.unwrap_or(entry_ptr);
                 }
                 Entry::Tombstone => {
                     if tombstone.is_none() {
@@ -128,7 +125,7 @@ impl<V> Table<V> {
                     }
                 }
                 Entry::Occupied(e) => {
-                    if Gc::ptr_eq(&e.key, &key) {
+                    if Gc::ptr_eq(e.key, key) {
                         return entry_ptr;
                     }
                 }
@@ -153,7 +150,7 @@ impl<V> Table<V> {
             let entry_old = unsafe { &mut *old_ptr.add(i) };
             if let Entry::Occupied(e) = entry_old {
                 let entry_new = self.find_entry_mut(e.key);
-                mem::swap(entry_new, entry_old)
+                mem::swap(entry_new, entry_old);
             }
         }
         // Deallocate the old array.
@@ -202,7 +199,7 @@ impl<V> Table<V> {
 impl<'table, V> IntoIterator for &'table Table<V> {
     type Item = (&'table RefString, &'table V);
 
-    type IntoIter = TableIter<'table, V>;
+    type IntoIter = Iter<'table, V>;
 
     fn into_iter(self) -> Self::IntoIter {
         Self::IntoIter {
@@ -245,14 +242,15 @@ struct EntryInner<V> {
     val: V,
 }
 
-pub struct TableIter<'table, V> {
+#[derive(Debug)]
+pub struct Iter<'table, V> {
     ptr: NonNull<Entry<V>>,
     ptr_: PhantomData<&'table Entry<V>>,
     offset: usize,
     capacity: usize,
 }
 
-impl<'table, V> Iterator for TableIter<'table, V> {
+impl<'table, V> Iterator for Iter<'table, V> {
     type Item = (&'table RefString, &'table V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -436,7 +434,7 @@ mod tests {
 
         let s1 = table.find(&key1.data, key1.hash).unwrap();
         let s2 = table.find(&key2.data, key2.hash).unwrap();
-        assert!(Gc::ptr_eq(&s1, &key1));
-        assert!(Gc::ptr_eq(&s2, &key2));
+        assert!(Gc::ptr_eq(s1, key1));
+        assert!(Gc::ptr_eq(s2, key2));
     }
 }

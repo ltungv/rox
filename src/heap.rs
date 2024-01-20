@@ -18,7 +18,7 @@ const GC_GROWTH_FACTOR: usize = 2;
 /// know exactly when an object can be deallocated. Thus, in the context of the VM,  `ObjectRef` is
 /// similar to a smart pointer that can deallocate itself when its no longer in use.
 #[derive(Debug)]
-pub(crate) struct Heap {
+pub struct Heap {
     // States for the GC.
     alloc_bytes: usize,
     gc_next_threshold: usize,
@@ -43,7 +43,7 @@ impl Default for Heap {
 impl Heap {
     /// Allocates a new object and returns a handle to it. The object is pushed to the head of
     /// the list of allocated data.
-    pub(crate) fn alloc<T: GcSized, F>(&mut self, data: T, map: F) -> (Object, Gc<T>)
+    pub fn alloc<T: GcSized, F>(&mut self, data: T, map: F) -> (Object, Gc<T>)
     where
         F: Fn(Gc<T>) -> Object,
     {
@@ -66,18 +66,15 @@ impl Heap {
 
     /// Interned a string and returned a reference to it. The same reference is returned for 2
     /// equal strings.
-    pub(crate) fn intern(&mut self, data: String) -> RefString {
+    pub fn intern(&mut self, data: String) -> RefString {
         let hash = ObjString::hash(&data);
-        match self.strings.find(&data, hash) {
-            // Clone the reference counted pointer, increasing its strong count.
-            Some(s) => s,
-            None => {
-                let obj_string = ObjString { data, hash };
-                let (_, s) = self.alloc(obj_string, Object::String);
-                self.strings.set(s, ());
-                s
-            }
+        if let Some(s) = self.strings.find(&data, hash) {
+            return s;
         }
+        let obj_string = ObjString { data, hash };
+        let (_, s) = self.alloc(obj_string, Object::String);
+        self.strings.set(s, ());
+        s
     }
 
     /// Release all objects whose address is not included in the hash set. This method also remove
@@ -87,7 +84,7 @@ impl Heap {
     ///
     /// We must ensure that all reachable pointers have been marked. Otherwise, we'll deallocate
     /// objects that are in-used and leave dangling pointers.
-    pub(crate) unsafe fn sweep(&mut self) {
+    pub unsafe fn sweep(&mut self) {
         let mut prev_obj: Option<Object> = None;
         let mut curr_obj = self.head;
 
@@ -122,13 +119,13 @@ impl Heap {
     }
 
     /// Returned the number of bytes that are being allocated.
-    pub(crate) fn size(&self) -> usize {
+    pub const fn size(&self) -> usize {
         self.alloc_bytes
     }
 
     /// Returned the next GC threshold in bytes. If `Self::size() > Self::next_gc()`, the user should start
     /// tracing all reachable objects and hand it to `Self::sweep`.
-    pub(crate) fn next_gc(&self) -> usize {
+    pub const fn next_gc(&self) -> usize {
         #[cfg(not(feature = "dbg-stress-gc"))]
         let next = self.gc_next_threshold;
 
@@ -190,7 +187,7 @@ impl Drop for Heap {
     fn drop(&mut self) {
         // Safety: If the heap is drop then both the compiler and vm will no longer be in use so
         // deallocating all objects is safe.
-        for object in self.into_iter() {
+        for object in &*self {
             unsafe { self.dealloc(object) };
         }
 
@@ -201,7 +198,7 @@ impl Drop for Heap {
 impl IntoIterator for &Heap {
     type Item = Object;
 
-    type IntoIter = HeapIter;
+    type IntoIter = Iter;
 
     fn into_iter(self) -> Self::IntoIter {
         Self::IntoIter { next: self.head }
@@ -209,11 +206,12 @@ impl IntoIterator for &Heap {
 }
 
 /// An iterator through all currently allocated objects.
-pub(crate) struct HeapIter {
+#[derive(Debug)]
+pub struct Iter {
     next: Option<Object>,
 }
 
-impl Iterator for HeapIter {
+impl Iterator for Iter {
     type Item = Object;
 
     fn next(&mut self) -> Option<Self::Item> {

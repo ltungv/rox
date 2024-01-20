@@ -1,23 +1,23 @@
 //! Implementation of a simple static stack structure.
 
-use std::mem::{self, MaybeUninit};
+use std::mem::MaybeUninit;
 
 #[derive(Debug)]
-pub(crate) struct Stack<T, const N: usize> {
-    items: [MaybeUninit<T>; N],
+pub struct Stack<T, const N: usize> {
+    items: Box<[MaybeUninit<T>; N]>,
     len: usize,
 }
 
 impl<T, const N: usize> Stack<T, N> {
     /// Add a value to the top of the stack. This method panics if the stack is full.
-    pub(crate) fn push(&mut self, value: T) {
+    pub fn push(&mut self, value: T) {
         self.items[self.len].write(value);
         self.len += 1;
     }
 
     /// Remove the value at the top of the stack and return it. This method panics if the stack
     /// is empty
-    pub(crate) fn pop(&mut self) -> T {
+    pub fn pop(&mut self) -> T {
         self.len -= 1;
         // SAFETY: All items at index below self.len must have been initialized
         unsafe { self.items[self.len].assume_init_read() }
@@ -25,35 +25,35 @@ impl<T, const N: usize> Stack<T, N> {
 
     /// Remove `count` values from the top of the stack. This method only adjusts the stack pointer
     /// and makes no modification to the underlying data array.
-    pub(crate) fn remove(&mut self, count: usize) {
+    pub fn remove(&mut self, count: usize) {
         self.len -= count;
     }
 
     /// Remove all values from the stack. This method only adjusts the stack pointer and makes no
     /// modification to the underlying data array.
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.len = 0;
     }
 
     /// Returns the number of values contained within the stack.
-    pub(crate) fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.len
     }
 
     /// Get a slice of `count` values at the top of the stack.
-    pub(crate) fn topn(&self, count: usize) -> &[T] {
+    pub fn topn(&self, count: usize) -> &[T] {
         // SAFETY: All items at index below self.len must have been initialized
-        unsafe { mem::transmute(&self.items[self.len - count..self.len]) }
+        unsafe { &*(std::ptr::addr_of!(self.items[self.len - count..self.len]) as *const [T]) }
     }
 
     /// Get a reference to the value at the top of the stack.
-    pub(crate) fn top(&self, n: usize) -> &T {
+    pub fn top(&self, n: usize) -> &T {
         // SAFETY: All items at index below self.len must have been initialized
         unsafe { self.at(self.len - n - 1) }
     }
 
     /// Get a mutable reference to the value at the top of the stack.
-    pub(crate) fn top_mut(&mut self, n: usize) -> &mut T {
+    pub fn top_mut(&mut self, n: usize) -> &mut T {
         // SAFETY: All items at index below self.len must have been initialized
         unsafe { self.at_mut(self.len - n - 1) }
     }
@@ -63,7 +63,7 @@ impl<T, const N: usize> Stack<T, N> {
     /// ## Safety
     ///
     /// Caller must ensure that the index points to a valid item in the stack.
-    pub(crate) unsafe fn at(&self, index: usize) -> &T {
+    pub unsafe fn at(&self, index: usize) -> &T {
         self.items.get_unchecked(index).assume_init_ref()
     }
 
@@ -72,7 +72,7 @@ impl<T, const N: usize> Stack<T, N> {
     /// ## Safety
     ///
     /// Caller must ensure that the index points to a valid item in the stack.
-    pub(crate) unsafe fn at_mut(&mut self, index: usize) -> &mut T {
+    pub unsafe fn at_mut(&mut self, index: usize) -> &mut T {
         self.items.get_unchecked_mut(index).assume_init_mut()
     }
 }
@@ -81,37 +81,36 @@ impl<T, const N: usize> Default for Stack<T, N> {
     fn default() -> Self {
         // SAFETY: Coercing an uninitialized array into an array of uninitialized should be ok.
         let items: [MaybeUninit<T>; N] = unsafe { MaybeUninit::uninit().assume_init() };
-        Self { items, len: 0 }
+        Self {
+            items: Box::new(items),
+            len: 0,
+        }
     }
 }
 
 impl<'stack, T, const N: usize> IntoIterator for &'stack Stack<T, N> {
     type Item = &'stack T;
 
-    type IntoIter = StackIterator<'stack, T, N>;
+    type IntoIter = Iter<'stack, T, N>;
 
     fn into_iter(self) -> Self::IntoIter {
-        StackIterator::new(self)
+        let top = self.len;
+        Self::IntoIter {
+            stack: self,
+            bot: 0,
+            top,
+        }
     }
 }
 
-pub(crate) struct StackIterator<'stack, T, const N: usize> {
+#[derive(Debug)]
+pub struct Iter<'stack, T, const N: usize> {
     stack: &'stack Stack<T, N>,
     top: usize,
     bot: usize,
 }
 
-impl<'stack, T, const N: usize> StackIterator<'stack, T, N> {
-    fn new(stack: &'stack Stack<T, N>) -> Self {
-        Self {
-            stack,
-            bot: 0,
-            top: stack.len,
-        }
-    }
-}
-
-impl<'stack, T, const N: usize> Iterator for StackIterator<'stack, T, N> {
+impl<'stack, T, const N: usize> Iterator for Iter<'stack, T, N> {
     type Item = &'stack T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -125,7 +124,7 @@ impl<'stack, T, const N: usize> Iterator for StackIterator<'stack, T, N> {
         }
     }
 }
-impl<'stack, T, const N: usize> DoubleEndedIterator for StackIterator<'stack, T, N> {
+impl<'stack, T, const N: usize> DoubleEndedIterator for Iter<'stack, T, N> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.bot >= self.top {
             None
@@ -138,7 +137,7 @@ impl<'stack, T, const N: usize> DoubleEndedIterator for StackIterator<'stack, T,
     }
 }
 
-impl<'stack, T, const N: usize> ExactSizeIterator for StackIterator<'stack, T, N> {
+impl<'stack, T, const N: usize> ExactSizeIterator for Iter<'stack, T, N> {
     fn len(&self) -> usize {
         self.top - self.bot
     }
@@ -234,8 +233,7 @@ mod tests {
         // Top should return the same value as pop
         for _ in 0..TEST_STACK_SIZE {
             let top = *s.top(0);
-            let pop = s.pop();
-            assert_eq!(pop, top);
+            assert_eq!(s.pop(), top);
         }
     }
 

@@ -11,10 +11,10 @@ use crate::{
 };
 
 #[cfg(feature = "dbg-execution")]
-use crate::chunk::disassemble_chunk;
+use crate::chunk::disassemble;
 
 /// The max number of call frames can be handled by the virtual machine.
-pub(crate) const MAX_FRAMES: usize = 64;
+pub const MAX_FRAMES: usize = 64;
 
 /// Max number of parameters a function can accept.
 const MAX_PARAMS: usize = u8::MAX as usize;
@@ -72,7 +72,7 @@ const MAX_UPVALUES: usize = u8::MAX as usize + 1;
 ///              | "true" | "false" | "nil"
 ///              | "(" expr ")" ;
 /// ```
-pub(crate) struct Parser<'src, 'vm> {
+pub struct Parser<'src, 'vm> {
     /// The flag to indicate that the compilation process had error(s).
     had_error: bool,
     /// The flag to indicate that the compilation process is in a bad state.
@@ -93,7 +93,7 @@ pub(crate) struct Parser<'src, 'vm> {
 
 impl<'src, 'vm> Parser<'src, 'vm> {
     /// Create a new parser that reads the given source string.
-    pub(crate) fn new(src: &'src str, heap: &'vm mut Heap) -> Self {
+    pub fn new(src: &'src str, heap: &'vm mut Heap) -> Self {
         let fun = ObjFun::new(None);
         let mut compilers = Stack::default();
         compilers.push(Compiler::new(fun, FunctionType::Script));
@@ -110,7 +110,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     /// Compile the source and returns its chunk.
-    pub(crate) fn compile(mut self) -> Option<ObjFun> {
+    pub fn compile(mut self) -> Option<ObjFun> {
         self.build();
         let compiler = self.take();
         if self.had_error {
@@ -123,12 +123,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn take(&mut self) -> Compiler<'src> {
         self.emit_return();
         let mut compiler = self.compilers.pop();
-        compiler.fun.upvalue_count = compiler.upvalues.len() as u8;
+        compiler.fun.upvalue_count =
+            u16::try_from(compiler.upvalues.len()).expect("[bug] too many upvalues");
 
         #[cfg(feature = "dbg-execution")]
         match &compiler.fun.name {
-            None => disassemble_chunk(&compiler.fun.chunk, "code"),
-            Some(s) => disassemble_chunk(&compiler.fun.chunk, &s.data),
+            None => disassemble(&compiler.fun.chunk, "code"),
+            Some(s) => disassemble(&compiler.fun.chunk, &s.data),
         };
 
         compiler
@@ -402,7 +403,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                     return;
                 }
             }
-            self.add_local(name)
+            self.add_local(name);
         }
     }
 
@@ -719,7 +720,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// expr       --> assign ;
     /// ```
     fn expression(&mut self) {
-        self.parse_precedence(Precedence::Assignment)
+        self.parse_precedence(Precedence::Assignment);
     }
 
     /// Starts at the current token and parses any expression at the given precedence level
@@ -949,7 +950,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             }
         }
         self.consume(Kind::RParen, "Expect ')' after arguments.");
-        argc as u8
+        u8::try_from(argc).expect("[bug] too many arguments")
     }
 
     /// Parse the 'this' keyword as a local variable.
@@ -1038,12 +1039,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             // The LHS can be used as an assignment target.
             self.expression();
             self.emit(op_set);
-            self.emit_byte(arg);
         } else {
             // The LHS can't be used as an assignment target.
             self.emit(op_get);
-            self.emit_byte(arg);
         }
+        self.emit_byte(arg);
     }
 
     /// Find the stack index the hold the local variable with the given name.
@@ -1060,7 +1060,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                     self.error_prev("Can't read local variable in its own initializer.");
                 }
                 // Found a valid value for the variable.
-                return Some(id as u8);
+                return Some(u8::try_from(id).expect("[bug] too many local variables"));
             }
         }
         None
@@ -1103,7 +1103,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // Find an upvalue that references the same index.
         for (upval_index, upval) in self.compiler(height).upvalues.into_iter().enumerate() {
             if upval.index == index && upval.is_local == is_local {
-                return upval_index as u8;
+                return u8::try_from(upval_index).expect("[bug] too many upvalues");
             }
         }
         let compiler = self.compiler_mut(height);
@@ -1115,7 +1115,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // Add the upvalue.
         let upvalue = Upvalue { is_local, index };
         compiler.upvalues.push(upvalue);
-        upvalue_count as u8
+        u8::try_from(upvalue_count).expect("[bug] too many upvalues")
     }
 
     /// Create a string literal and emit bytecodes to load it value.
@@ -1199,8 +1199,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         } else {
             let hi = (jump >> 8) & 0xff;
             let lo = jump & 0xff;
-            self.emit_byte(hi as u8);
-            self.emit_byte(lo as u8);
+            self.emit_byte(u8::try_from(hi).expect("[bug] invalid long jump range"));
+            self.emit_byte(u8::try_from(lo).expect("[bug] invalid long jump range"));
         }
     }
 
@@ -1233,8 +1233,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         } else {
             let hi = (jump >> 8) & 0xff;
             let lo = jump & 0xff;
-            self.compiler_mut(0).fun.chunk.instructions[offset] = hi as u8;
-            self.compiler_mut(0).fun.chunk.instructions[offset + 1] = lo as u8;
+            self.compiler_mut(0).fun.chunk.instructions[offset] =
+                u8::try_from(hi).expect("[bug] invalid long jump range");
+            self.compiler_mut(0).fun.chunk.instructions[offset + 1] =
+                u8::try_from(lo).expect("[bug] invalid long jump range");
         }
     }
 
@@ -1244,7 +1246,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.error_prev("Too many constants in one chunk.");
             return 0;
         }
-        self.compiler_mut(0).fun.chunk.write_constant(value) as u8
+        let idx = self.compiler_mut(0).fun.chunk.write_constant(value);
+        u8::try_from(idx).expect("[bug] too many constants")
     }
 
     /// Start a new scope.
@@ -1373,7 +1376,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Create an compilation error pointing at the line of the current token.
     fn error_curr(&mut self, message: &str) {
-        self.error_at(self.token_curr.line, self.token_curr.lexeme, message)
+        self.error_at(self.token_curr.line, self.token_curr.lexeme, message);
     }
 
     /// Create an compilation error pointing at a particular line and lexeme.
@@ -1398,7 +1401,7 @@ struct ClassCompiler {
 }
 
 impl ClassCompiler {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self { has_super: false }
     }
 }
@@ -1468,7 +1471,7 @@ struct Local<'src> {
 }
 
 /// All precedence levels in Lox.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Precedence {
     /// No precedence.
     None,
@@ -1496,7 +1499,7 @@ enum Precedence {
 
 impl Precedence {
     /// Get the immediately higher precedence level.
-    fn next(&self) -> Self {
+    const fn next(self) -> Self {
         match self {
             Self::None => Self::Assignment,
             Self::Assignment => Self::Or,
@@ -1507,23 +1510,20 @@ impl Precedence {
             Self::Term => Self::Factor,
             Self::Factor => Self::Unary,
             Self::Unary => Self::Call,
-            Self::Call => Self::Primary,
-            Self::Primary => Self::Primary,
+            Self::Call | Self::Primary => Self::Primary,
         }
     }
 
     /// Get the precedence of a specific token kind.
-    fn of(kind: Kind) -> Self {
+    const fn of(kind: Kind) -> Self {
         match kind {
-            Kind::Or => Precedence::Or,
-            Kind::And => Precedence::And,
-            Kind::BangEqual | Kind::EqualEqual => Precedence::Equality,
-            Kind::Greater | Kind::GreaterEqual | Kind::Less | Kind::LessEqual => {
-                Precedence::Comparison
-            }
-            Kind::Minus | Kind::Plus => Precedence::Term,
-            Kind::Slash | Kind::Star => Precedence::Factor,
-            Kind::LParen | Kind::Dot => Precedence::Call,
+            Kind::Or => Self::Or,
+            Kind::And => Self::And,
+            Kind::BangEqual | Kind::EqualEqual => Self::Equality,
+            Kind::Greater | Kind::GreaterEqual | Kind::Less | Kind::LessEqual => Self::Comparison,
+            Kind::Minus | Kind::Plus => Self::Term,
+            Kind::Slash | Kind::Star => Self::Factor,
+            Kind::LParen | Kind::Dot => Self::Call,
             _ => Self::None,
         }
     }
