@@ -80,7 +80,7 @@ pub fn disassemble(chunk: &Chunk, name: &str) {
 pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
     let line_current = chunk.get_line(offset);
     let line_previous = chunk.get_line(offset.saturating_sub(1));
-    // Annotation for seperating instructions from different lines.
+    // Annotation for separating instructions from different lines.
     print!("{offset:04} ");
     if offset > 0 && line_current == line_previous {
         print!("   | ");

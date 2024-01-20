@@ -1,4 +1,4 @@
-//! Implementation of the bytecode compiler for the Lox lanaguage.
+//! Implementation of the bytecode compiler for the Lox language.
 
 use crate::{
     chunk::MAX_CONSTANTS,
@@ -25,7 +25,7 @@ const MAX_LOCALS: usize = u8::MAX as usize + 1;
 /// Max number of upvalues a function can contain.
 const MAX_UPVALUES: usize = u8::MAX as usize + 1;
 
-/// Scan for tokens and emit corresponding bytecodes.
+/// Scan for tokens and emit corresponding byte codes.
 ///
 /// ## Grammars
 ///
@@ -212,7 +212,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             // Parse the initial value assigned to the variable.
             self.expression();
         } else {
-            // Emit bytecodes for setting the value to 'nil' if no initial expression was found.
+            // Emit byte codes for setting the value to 'nil' if no initial expression was found.
             self.emit(Opcode::Nil);
         }
         self.consume(Kind::Semicolon, "Expect ';' after variable declaration.");
@@ -433,9 +433,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.make_constant(value)
     }
 
-    /// Emit bytecodes for defining a global variable.
+    /// Emit byte codes for defining a global variable.
     fn define_variable(&mut self, global_id: u8) {
-        // If we are in a local scope, we don't need to emit bytecodes for loading a variable's
+        // If we are in a local scope, we don't need to emit byte codes for loading a variable's
         // value. We have already executed the code for the variable’s initializer (or the
         // implicit nil), and that value is sitting right on top of the stack as the only
         // remaining temporary.
@@ -635,15 +635,15 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.emit(Opcode::Pop);
             Some(jump_exit)
         };
-        // Loop's incrementer.
+        // Loop's incrementor.
         let increment_start = if self.advance_if(Kind::RParen) {
             // The increment part is empty, so we don't have to emit a jump instruction.
             None
         } else {
-            // If there's an incrementer, we immediately jump to the loop's body so it can be
+            // If there's an incrementor, we immediately jump to the loop's body so it can be
             // executed first.
             let jump_to_body = self.emit_jump(Opcode::Jump);
-            // Keep track of the incrementer's starting position.
+            // Keep track of the incrementor's starting position.
             let increment_start = self.compiler(0).fun.chunk.instructions.len();
             // Parse expression and ignore its result at runtime.
             self.expression();
@@ -658,9 +658,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // Loop's body.
         self.statement();
         match increment_start {
-            // Jump back to the first instruction in the loop if there's no incrementer.
+            // Jump back to the first instruction in the loop if there's no incrementor.
             None => self.emit_loop(loop_start),
-            // Jump back to the incrementer so its expression can be run after the body.
+            // Jump back to the incrementor so its expression can be run after the body.
             Some(offset) => self.emit_loop(offset),
         }
         // Patch loop exit jump if we have an exit condition.
@@ -932,7 +932,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
     }
 
-    /// Parse the parameters of funcion call where the '(' token after the function
+    /// Parse the parameters of function call where the '(' token after the function
     /// name has been consumed.
     fn argument_list(&mut self) -> u8 {
         let mut argc = 0;
@@ -997,7 +997,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.emit_byte(name);
             self.emit_byte(argc);
         } else {
-            // Create ObjBoundMethod that can be assigned to some identitier.
+            // Create ObjBoundMethod that can be assigned to some identifier.
             self.named_variable(superclass_token, false);
             self.emit(Opcode::GetSuper);
             self.emit_byte(name);
@@ -1018,7 +1018,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.named_variable(self.token_prev, can_assign);
     }
 
-    /// Emit the bytecodes for loading a variable with a particular name.
+    /// Emit the byte codes for loading a variable with a particular name.
     fn named_variable(&mut self, name: Token<'_>, can_assign: bool) {
         let (arg, op_get, op_set) = self
             // Find value in local frame.
@@ -1118,7 +1118,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         u8::try_from(upvalue_count).expect("too many upvalues.")
     }
 
-    /// Create a string literal and emit bytecodes to load it value.
+    /// Create a string literal and emit byte codes to load it value.
     ///
     /// ## Grammar
     ///
@@ -1135,7 +1135,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit_constant(value);
     }
 
-    /// Create a number literal and emit bytecodes to load it value.
+    /// Create a number literal and emit byte codes to load it value.
     ///
     /// ## Grammar
     ///
@@ -1150,7 +1150,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit_constant(value);
     }
 
-    /// Create a literal and emit bytecodes to load it value.
+    /// Create a literal and emit byte codes to load it value.
     ///
     /// ## Grammar
     ///
@@ -1217,7 +1217,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit(Opcode::Ret);
     }
 
-    /// Write a constant and the necessary bytecodes for loading it to
+    /// Write a constant and the necessary byte codes for loading it to
     /// the currently compiling chunk.
     fn emit_constant(&mut self, value: Value) {
         let constant_id = self.make_constant(value);
@@ -1298,7 +1298,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     /// Synchronize the parser to a normal state where we can continue parsing
-    /// after an error occured.
+    /// after an error occurred.
     fn synchronize(&mut self) {
         self.panicking = false;
         while !self.check_curr(Kind::Eof) {
