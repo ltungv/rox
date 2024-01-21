@@ -27,9 +27,8 @@ impl Chunk {
     }
 
     /// Write a constant into the chunk.
-    pub fn write_constant(&mut self, value: Value) -> usize {
+    pub fn write_constant(&mut self, value: Value) {
         self.constants.push(value);
-        self.constants.len() - 1
     }
 
     /// Get the line information of the bytecode at a specific offset.

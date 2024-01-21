@@ -1,3 +1,16 @@
+use std::{error, fmt};
+
+#[derive(Debug)]
+pub struct Error(u8);
+
+impl error::Error for Error {}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Unknown byte code '{}'", self.0,)
+    }
+}
+
 /// Opcode is a byte specifying the action that the VM must take.
 ///
 /// # Notes
@@ -109,7 +122,8 @@ impl From<Opcode> for u8 {
 }
 
 impl TryFrom<u8> for Opcode {
-    type Error = String;
+    type Error = Error;
+
     fn try_from(byte: u8) -> Result<Self, Self::Error> {
         let op = match byte {
             0 => Self::Const,
@@ -153,7 +167,7 @@ impl TryFrom<u8> for Opcode {
             38 => Self::Class,
             39 => Self::Inherit,
             40 => Self::Method,
-            b => return Err(format!("Unknown byte-code '{b}'")),
+            b => return Err(Error(b)),
         };
         Ok(op)
     }

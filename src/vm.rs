@@ -15,7 +15,7 @@ use crate::{
         Object, RefBoundMethod, RefClass, RefClosure, RefFun, RefInstance, RefNativeFun, RefString,
         RefUpvalue,
     },
-    opcode::Opcode,
+    opcode::{self, Opcode},
     stack::Stack,
     table::Table,
     value::{self, Value},
@@ -28,13 +28,15 @@ use crate::chunk::disassemble_instruction;
 /// The max number of values can be put onto the virtual machine's stack.
 const VM_STACK_SIZE: usize = 256;
 
-/// An enumeration of potential errors occur when running the byte-codes.
+/// An enumeration of potential errors occur when running the byte codes.
 #[derive(Debug)]
 pub enum RuntimeError {
     /// Can't perform some operations given the current value(s).
     Value(value::Error),
     /// Can't perform some operations given the current object(s).
     Object(object::Error),
+    /// Can't parse an invalid byte code.
+    OpCode(opcode::Error),
     /// Overflow the virtual machine's stack.
     StackOverflow,
     /// Can't access a property.
@@ -67,6 +69,7 @@ impl fmt::Display for RuntimeError {
         match self {
             Self::Value(err) => err.fmt(f),
             Self::Object(err) => err.fmt(f),
+            Self::OpCode(err) => err.fmt(f),
             Self::StackOverflow => f.write_str("Stack overflow."),
             Self::ObjectHasNoProperty => f.write_str("Only instances have properties."),
             Self::ObjectHasNoField => f.write_str("Only instances have fields."),
@@ -94,6 +97,12 @@ impl From<object::Error> for RuntimeError {
     }
 }
 
+impl From<opcode::Error> for RuntimeError {
+    fn from(err: opcode::Error) -> Self {
+        Self::OpCode(err)
+    }
+}
+
 /// A bytecode virtual machine for the Lox programming language.
 #[derive(Debug)]
 pub struct VirtualMachine {
@@ -118,7 +127,7 @@ impl VirtualMachine {
     ///
     /// # Panics
     ///
-    /// Panics if we can't define a native function for the virtual machine.
+    /// Panics if we can't define a native function for the virtual machine due to stack overflows.
     pub fn new() -> Self {
         let mut heap = Heap::default();
         let str_init = heap.intern(String::from("init"));
@@ -198,7 +207,7 @@ impl VirtualMachine {
                 );
             }
 
-            match Opcode::try_from(self.read_byte()).expect("invalid opcode.") {
+            match Opcode::try_from(self.read_byte())? {
                 Opcode::Const => self.constant()?,
                 Opcode::Nil => self.stack_push(Value::Nil)?,
                 Opcode::True => self.stack_push(Value::Bool(true))?,
@@ -426,7 +435,7 @@ impl VirtualMachine {
 
     fn closure(&mut self) -> Result<(), RuntimeError> {
         let fun = self.read_constant().as_fun()?;
-        let mut upvalues = Vec::with_capacity(fun.upvalue_count as usize);
+        let mut upvalues = Vec::with_capacity(fun.upvalue_count);
         for _ in 0..fun.upvalue_count {
             let is_local = self.read_byte() == 1;
             let index = self.read_byte() as usize;

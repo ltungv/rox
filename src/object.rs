@@ -314,7 +314,7 @@ pub struct ObjFun {
     /// Number of parameters the function has
     pub arity: u8,
     /// Number of upvalues captured by the function
-    pub upvalue_count: u16,
+    pub upvalue_count: usize,
     /// The bytecode chunk of this function
     pub chunk: Chunk,
 }

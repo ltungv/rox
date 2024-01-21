@@ -1,7 +1,6 @@
 //! Implementation of the bytecode compiler for the Lox language.
 
 use crate::{
-    chunk::MAX_CONSTANTS,
     heap::Heap,
     object::{ObjFun, Object},
     opcode::Opcode,
@@ -20,10 +19,10 @@ pub const MAX_FRAMES: usize = 64;
 const MAX_PARAMS: usize = u8::MAX as usize;
 
 /// Max number of local variables a function can contain.
-const MAX_LOCALS: usize = u8::MAX as usize + 1;
+const MAX_LOCALS: usize = 1 << 8;
 
 /// Max number of upvalues a function can contain.
-const MAX_UPVALUES: usize = u8::MAX as usize + 1;
+const MAX_UPVALUES: usize = 1 << 8;
 
 /// Scan for tokens and emit corresponding byte codes.
 ///
@@ -123,8 +122,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn take(&mut self) -> Compiler<'src> {
         self.emit_return();
         let mut compiler = self.compilers.pop();
-        compiler.fun.upvalue_count =
-            u16::try_from(compiler.upvalues.len()).expect("too many upvalues.");
+        compiler.fun.upvalue_count = compiler.upvalues.len();
 
         #[cfg(feature = "dbg-execution")]
         match &compiler.fun.name {
@@ -939,7 +937,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if !self.check_curr(Kind::RParen) {
             loop {
                 self.expression();
-                if argc == MAX_PARAMS {
+                if argc as usize == MAX_PARAMS {
                     self.error_prev("Can't have more than 255 arguments.");
                     break;
                 }
@@ -950,7 +948,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             }
         }
         self.consume(Kind::RParen, "Expect ')' after arguments.");
-        u8::try_from(argc).expect("too many arguments.")
+        argc
     }
 
     /// Parse the 'this' keyword as a local variable.
@@ -1054,13 +1052,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
         // Walk up from low scope to high scope to find a local with the given name.
         let compiler = self.compiler(height);
-        for (id, local) in compiler.locals.into_iter().enumerate().rev() {
+        for (id, local) in (0..=u8::MAX).zip(compiler.locals.into_iter()).rev() {
             if local.name == name.lexeme {
                 if local.depth == -1 {
                     self.error_prev("Can't read local variable in its own initializer.");
                 }
                 // Found a valid value for the variable.
-                return Some(u8::try_from(id).expect("too many local variables."));
+                return Some(id);
             }
         }
         None
@@ -1101,21 +1099,20 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// corresponding upvalue is returned instead of adding a new upvalue.
     fn add_upvalue(&mut self, height: usize, index: u8, is_local: bool) -> u8 {
         // Find an upvalue that references the same index.
-        for (upval_index, upval) in self.compiler(height).upvalues.into_iter().enumerate() {
-            if upval.index == index && upval.is_local == is_local {
-                return u8::try_from(upval_index).expect("too many upvalues.");
+        for (upvalue_id, upvalue) in (0..=u8::MAX).zip(self.compiler(height).upvalues.into_iter()) {
+            if upvalue.index == index && upvalue.is_local == is_local {
+                return upvalue_id;
             }
         }
         let compiler = self.compiler_mut(height);
-        let upvalue_count = compiler.upvalues.len();
-        if upvalue_count == MAX_UPVALUES {
+        let Ok(upvalue_count) = u8::try_from(compiler.upvalues.len()) else {
             self.error_prev("Too many closure variables in function.");
             return 0;
-        }
+        };
         // Add the upvalue.
         let upvalue = Upvalue { is_local, index };
         compiler.upvalues.push(upvalue);
-        u8::try_from(upvalue_count).expect("too many upvalues.")
+        upvalue_count
     }
 
     /// Create a string literal and emit byte codes to load it value.
@@ -1146,8 +1143,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     ///              | "(" expr ")" ;
     /// ```
     fn number(&mut self) {
-        let value = Value::Number(self.token_prev.lexeme.parse().expect("expect digits."));
-        self.emit_constant(value);
+        if let Ok(number) = self.token_prev.lexeme.parse() {
+            let value = Value::Number(number);
+            self.emit_constant(value);
+        } else {
+            self.error_prev("Expecting digits.");
+        }
     }
 
     /// Create a literal and emit byte codes to load it value.
@@ -1193,14 +1194,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn emit_loop(&mut self, start: usize) {
         self.emit(Opcode::Loop);
         // We do +2 to adjust for the 2 offset bytes.
-        let jump = self.compiler(0).fun.chunk.instructions.len() - start + 2;
-        if jump > u16::MAX.into() {
-            self.error_prev("Loop body too large.");
+        if let Ok(jump) = u16::try_from(self.compiler(0).fun.chunk.instructions.len() - start + 2) {
+            let [hi, lo] = jump.to_be_bytes();
+            self.emit_byte(hi);
+            self.emit_byte(lo);
         } else {
-            let hi = (jump >> 8) & 0xff;
-            let lo = jump & 0xff;
-            self.emit_byte(u8::try_from(hi).expect("invalid long jump range."));
-            self.emit_byte(u8::try_from(lo).expect("invalid long jump range."));
+            self.error_prev("Loop body too large.");
         }
     }
 
@@ -1227,27 +1226,24 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn patch_jump(&mut self, offset: usize) {
         // We do -2 to adjust for the 2 offset bytes.
-        let jump = self.compiler(0).fun.chunk.instructions.len() - offset - 2;
-        if jump > u16::MAX.into() {
-            self.error_prev("Too much code to jump over.");
+        if let Ok(jump) = u16::try_from(self.compiler(0).fun.chunk.instructions.len() - offset - 2)
+        {
+            let [hi, lo] = jump.to_be_bytes();
+            self.compiler_mut(0).fun.chunk.instructions[offset] = hi;
+            self.compiler_mut(0).fun.chunk.instructions[offset + 1] = lo;
         } else {
-            let hi = (jump >> 8) & 0xff;
-            let lo = jump & 0xff;
-            self.compiler_mut(0).fun.chunk.instructions[offset] =
-                u8::try_from(hi).expect("invalid long jump range.");
-            self.compiler_mut(0).fun.chunk.instructions[offset + 1] =
-                u8::try_from(lo).expect("invalid long jump range.");
+            self.error_prev("Too much code to jump over.");
         }
     }
 
     /// Write a constant to the currently compiling chunk.
     fn make_constant(&mut self, value: Value) -> u8 {
-        if self.compiler_mut(0).fun.chunk.constants.len() >= MAX_CONSTANTS {
+        let Ok(idx) = u8::try_from(self.compiler_mut(0).fun.chunk.constants.len()) else {
             self.error_prev("Too many constants in one chunk.");
             return 0;
-        }
-        let idx = self.compiler_mut(0).fun.chunk.write_constant(value);
-        u8::try_from(idx).expect("too many constants.")
+        };
+        self.compiler_mut(0).fun.chunk.write_constant(value);
+        idx
     }
 
     /// Start a new scope.
