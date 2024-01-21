@@ -19,7 +19,9 @@ fn main() {
 }
 
 fn run_repl() {
-    let mut vm = VirtualMachine::new();
+    let Some(mut vm) = VirtualMachine::new() else {
+        process::exit(70);
+    };
     let mut reader = BufReader::new(io::stdin());
     loop {
         print!("> ");
@@ -51,7 +53,9 @@ fn run_file(path: &str) {
             process::exit(74);
         }
     };
-    let mut vm = VirtualMachine::new();
+    let Some(mut vm) = VirtualMachine::new() else {
+        process::exit(70);
+    };
     match vm.interpret(&src) {
         Ok(()) => {}
         Err(InterpretError::Compile) => process::exit(65),

@@ -127,12 +127,15 @@ impl Heap {
     /// tracing all reachable objects and hand it to `Self::sweep`.
     pub const fn next_gc(&self) -> usize {
         #[cfg(not(feature = "dbg-stress-gc"))]
-        let next = self.gc_next_threshold;
+        {
+            self.gc_next_threshold
+        }
 
         #[cfg(feature = "dbg-stress-gc")]
-        let next = 0;
-
-        next
+        {
+            let _ = self;
+            0
+        }
     }
 
     /// Deallocate an object from the managed heap.

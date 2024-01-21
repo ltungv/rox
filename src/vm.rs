@@ -116,19 +116,10 @@ pub struct VirtualMachine {
     str_init: RefString,
 }
 
-impl Default for VirtualMachine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl VirtualMachine {
     /// Create a new virtual machine that prints to the given output.
-    ///
-    /// # Panics
-    ///
-    /// Panics if we can't define a native function for the virtual machine due to stack overflows.
-    pub fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Option<Self> {
         let mut heap = Heap::default();
         let str_init = heap.intern(String::from("init"));
         let mut vm = Self {
@@ -141,9 +132,15 @@ impl VirtualMachine {
             heap,
             str_init,
         };
-        vm.define_native("clock", 0, clock_native)
-            .expect("can't define native function.");
-        vm
+        match vm.setup_natives() {
+            Ok(()) => Some(vm),
+            Err(err) => {
+                eprintln!("{err}");
+                vm.trace_calls();
+                vm.stack.clear();
+                None
+            }
+        }
     }
 }
 
@@ -162,6 +159,11 @@ impl VirtualMachine {
             self.stack.clear();
             InterpretError::Runtime
         })
+    }
+
+    fn setup_natives(&mut self) -> Result<(), RuntimeError> {
+        self.define_native("clock", 0, clock_native)?;
+        Ok(())
     }
 
     fn run(&mut self, fun: ObjFun) -> Result<(), RuntimeError> {
@@ -1014,7 +1016,7 @@ fn clock_native(_args: &[Value]) -> Value {
     let start = std::time::SystemTime::now();
     let since_epoch = start
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("time went backwards.");
+        .unwrap_or(std::time::Duration::ZERO);
     Value::Number(since_epoch.as_secs_f64())
 }
 
