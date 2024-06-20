@@ -89,7 +89,7 @@ impl Heap {
         let mut curr_obj = self.head;
 
         let mut dangling_strings = Vec::with_capacity(self.strings.len());
-        for (k, _) in &self.strings {
+        for (k, ()) in &self.strings {
             if !k.is_marked() {
                 dangling_strings.push(*k);
             }

@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "out of bounds")]
     fn test_stack_push_through_limit() {
         let mut s = TestStack::default();
         for i in 0..TEST_STACK_SIZE {
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "attempt to subtract with overflow")]
     fn test_stack_pop_panics_on_empty() {
         let mut s = TestStack::default();
         // BOOOMM
@@ -252,14 +252,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "attempt to subtract with overflow")]
     fn test_stack_top_panics_when_empty() {
         let s = TestStack::default();
         s.top(0);
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "attempt to subtract with overflow")]
     fn test_stack_top_mut_panics_when_empty() {
         let mut s = TestStack::default();
         s.top_mut(0);
