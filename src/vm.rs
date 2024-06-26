@@ -887,16 +887,14 @@ impl VirtualMachine {
             return Err(RuntimeError::StackOverflow);
         }
         self.frames.push(frame);
-        self.current_frame =
-            unsafe { NonNull::new_unchecked(self.frames.top_mut(0) as *mut CallFrame) };
+        self.current_frame = NonNull::from(self.frames.top_mut(0));
         Ok(frame_count)
     }
 
     fn frames_pop(&mut self) -> CallFrame {
         let ret = self.frames.pop();
         if self.frames.len() > 0 {
-            self.current_frame =
-                unsafe { NonNull::new_unchecked(self.frames.top_mut(0) as *mut CallFrame) };
+            self.current_frame = NonNull::from(self.frames.top_mut(0));
         }
         ret
     }
