@@ -62,7 +62,10 @@ impl<T, const N: usize> StaticVec<T, N> {
     /// get more items than what the vector currently has.
     pub fn last_chunk(&self, count: usize) -> &[T] {
         // SAFETY: All items at index below self.len must have been initialized
-        unsafe { &*(std::ptr::addr_of!(self.ptr[self.len - count..self.len]) as *const [T]) }
+        unsafe {
+            &*(std::ptr::addr_of!(*self.ptr.get_unchecked(self.len - count..self.len))
+                as *const [T])
+        }
     }
 
     /// Get a reference to the value at the end of the vector.
