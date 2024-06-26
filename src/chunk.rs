@@ -3,7 +3,7 @@ use crate::{opcode::Opcode, scan::Line, static_vec::StaticVec, value::Value};
 #[cfg(feature = "dbg-execution")]
 use crate::vm::JumpDirection;
 
-const MAX_CONSTANTS: usize = u8::MAX as usize;
+const MAX_CONSTANTS: usize = 1 << 8;
 
 /// A chunk holds a sequence of instructions to be executes and their data.
 #[derive(Debug, Default)]
