@@ -16,7 +16,7 @@ use crate::{
         RefUpvalue,
     },
     opcode::{self, Opcode},
-    stack::Stack,
+    static_vec::StaticVec,
     table::Table,
     value::{self, Value},
     InterpretError,
@@ -106,8 +106,8 @@ impl From<opcode::Error> for RuntimeError {
 /// A bytecode virtual machine for the Lox programming language.
 #[derive(Debug)]
 pub struct VirtualMachine {
-    stack: Stack<Value, VM_STACK_SIZE>,
-    frames: Stack<CallFrame, MAX_FRAMES>,
+    stack: StaticVec<Value, VM_STACK_SIZE>,
+    frames: StaticVec<CallFrame, MAX_FRAMES>,
     current_frame: NonNull<CallFrame>,
     open_upvalues: Vec<RefUpvalue>,
     globals: Table<Value>,
@@ -123,12 +123,12 @@ impl VirtualMachine {
         let mut heap = Heap::default();
         let str_init = heap.intern(String::from("init"));
         let mut vm = Self {
-            stack: Stack::default(),
-            frames: Stack::default(),
+            stack: StaticVec::default(),
+            frames: StaticVec::default(),
             current_frame: NonNull::dangling(),
-            open_upvalues: Vec::new(),
+            open_upvalues: Vec::default(),
             globals: Table::default(),
-            grey_objects: Vec::new(),
+            grey_objects: Vec::default(),
             heap,
             str_init,
         };
@@ -401,7 +401,7 @@ impl VirtualMachine {
             ObjUpvalue::Open(stack_slot) => {
                 // SAFETY: The compiler should produce safe byte codes such that we never
                 // access uninitialized data.
-                let value = unsafe { self.stack.at(stack_slot) };
+                let value = unsafe { self.stack.get_unchecked(stack_slot) };
                 self.stack_push(*value)?;
             }
             // Value is on the heap.
@@ -430,7 +430,7 @@ impl VirtualMachine {
         };
         if let Some(slot) = stack_slot {
             // SAFETY: The compiler should produce safe code that access a safe part of the stack.
-            let v = unsafe { self.stack.at_mut(slot) };
+            let v = unsafe { self.stack.get_unchecked_mut(slot) };
             *v = value;
         }
     }
@@ -490,7 +490,7 @@ impl VirtualMachine {
             // Hoist the variable up into the upvalue so it can live after the stack frame is pop.
             if let Some(slot) = stack_slot {
                 // SAFETY: The compiler should produce safe code that access a safe part of the stack.
-                let v = unsafe { self.stack.at(slot) };
+                let v = unsafe { self.stack.get_unchecked(slot) };
                 *upvalue = ObjUpvalue::Closed(*v);
             }
         }
@@ -569,7 +569,7 @@ impl VirtualMachine {
         }
         let argc = argc as usize;
         let call = callee.call;
-        let res = call(self.stack.topn(argc));
+        let res = call(self.stack.last_chunk(argc));
         self.stack_remove_top(argc + 1);
         self.stack_push(res)?;
         Ok(())
@@ -628,7 +628,7 @@ impl VirtualMachine {
         let slot = self.read_byte() as usize;
         let frame_slot = self.frame().slot;
         // SAFETY: The compiler should produce safe code that access a safe part of the stack.
-        let value = unsafe { self.stack.at(frame_slot + slot) };
+        let value = unsafe { self.stack.get_unchecked(frame_slot + slot) };
         self.stack_push(*value)?;
         Ok(())
     }
@@ -639,7 +639,7 @@ impl VirtualMachine {
         let frame_slot = self.frame().slot;
         let value = *self.stack_top(0);
         // SAFETY: The compiler should produce safe code that access a safe part of the stack.
-        let v = unsafe { self.stack.at_mut(frame_slot + slot) };
+        let v = unsafe { self.stack.get_unchecked_mut(frame_slot + slot) };
         *v = value;
     }
 
@@ -886,25 +886,26 @@ impl VirtualMachine {
         if frame_count == MAX_FRAMES {
             return Err(RuntimeError::StackOverflow);
         }
-        self.frames.push(frame);
-        self.current_frame = NonNull::from(self.frames.top_mut(0));
+        // SAFETY: We already checked if the stack frame is full.
+        unsafe { self.frames.push_unchecked(frame) };
+        self.current_frame = NonNull::from(self.frames.last_mut(0));
         Ok(frame_count)
     }
 
     fn frames_pop(&mut self) -> CallFrame {
         let ret = self.frames.pop();
         if self.frames.len() > 0 {
-            self.current_frame = NonNull::from(self.frames.top_mut(0));
+            self.current_frame = NonNull::from(self.frames.last_mut(0));
         }
         ret
     }
 
     fn stack_push(&mut self, value: Value) -> Result<(), RuntimeError> {
-        let stack_size = self.stack.len();
-        if stack_size == VM_STACK_SIZE {
+        if self.stack.len() == VM_STACK_SIZE {
             return Err(RuntimeError::StackOverflow);
         }
-        self.stack.push(value);
+        // SAFETY: We already checked if the stack is full.
+        unsafe { self.stack.push_unchecked(value) };
         Ok(())
     }
 
@@ -913,11 +914,11 @@ impl VirtualMachine {
     }
 
     fn stack_top(&self, n: usize) -> &Value {
-        self.stack.top(n)
+        self.stack.last(n)
     }
 
     fn stack_top_mut(&mut self, n: usize) -> &mut Value {
-        self.stack.top_mut(n)
+        self.stack.last_mut(n)
     }
 
     fn stack_remove_top(&mut self, n: usize) {
@@ -1046,7 +1047,12 @@ impl CallFrame {
     unsafe fn read_constant(&mut self) -> Value {
         let constant_id = *self.ip;
         self.ip = self.ip.add(1);
-        *self.closure.fun.chunk.constants.at(constant_id as usize)
+        *self
+            .closure
+            .fun
+            .chunk
+            .constants
+            .get_unchecked(constant_id as usize)
     }
 }
 

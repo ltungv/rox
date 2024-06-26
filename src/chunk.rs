@@ -1,16 +1,15 @@
-use crate::{opcode::Opcode, scan::Line, stack::Stack, value::Value};
+use crate::{opcode::Opcode, scan::Line, static_vec::StaticVec, value::Value};
 
 #[cfg(feature = "dbg-execution")]
 use crate::vm::JumpDirection;
 
-/// Max number of constants a chunk can contain.
-pub const MAX_CONSTANTS: usize = u8::MAX as usize + 1;
+const MAX_CONSTANTS: usize = u8::MAX as usize;
 
 /// A chunk holds a sequence of instructions to be executes and their data.
 #[derive(Debug, Default)]
 pub struct Chunk {
-    pub constants: Stack<Value, MAX_CONSTANTS>,
     pub instructions: Vec<u8>,
+    pub constants: StaticVec<Value, MAX_CONSTANTS>,
     lines: Vec<RunLength<Line>>,
 }
 
@@ -26,9 +25,14 @@ impl Chunk {
         self.add_line(line);
     }
 
-    /// Write a constant into the chunk.
-    pub fn write_constant(&mut self, value: Value) {
-        self.constants.push(value);
+    /// Write a constant into the chunk and return its index. If the max number
+    /// of constants is reached, we return None instead of Some(index).
+    pub fn write_constant(&mut self, value: Value) -> Option<u8> {
+        u8::try_from(self.constants.len()).ok().inspect(|_| {
+            // SAFETY: We already checked if the number of constants is valid by limiting the size
+            // of our constant vector to `u8::MAX`.
+            unsafe { self.constants.push_unchecked(value) };
+        })
     }
 
     /// Get the line information of the bytecode at a specific offset.
@@ -135,7 +139,7 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
             let mut offset = offset + 1;
             let constant_id = chunk.instructions[offset] as usize;
             // SAFETY: The compiler must work correctly.
-            let constant = unsafe { chunk.constants.at(constant_id) };
+            let constant = unsafe { chunk.constants.get_unchecked(constant_id) };
             offset += 1;
             println!("{:-16} {constant_id:4} {constant}", "OP_CLOSURE");
             let fun = constant.as_fun().expect("expect function object.");
@@ -169,7 +173,7 @@ fn disassemble_simple(offset: usize, name: &'static str) -> usize {
 fn disassemble_constant(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
     let constant_id = chunk.instructions[offset + 1] as usize;
     // SAFETY: The compiler must work correctly.
-    let constant = unsafe { chunk.constants.at(constant_id) };
+    let constant = unsafe { chunk.constants.get_unchecked(constant_id) };
     println!("{name:-16} {constant_id:4} {constant}");
     offset + 2
 }
@@ -202,7 +206,7 @@ fn disassemble_invoke(chunk: &Chunk, offset: usize, name: &'static str) -> usize
     let slot = chunk.instructions[offset + 1];
     let argc = chunk.instructions[offset + 2];
     // SAFETY: The compiler must work correctly.
-    let file_name = unsafe { chunk.constants.at(slot as usize) };
+    let file_name = unsafe { chunk.constants.get_unchecked(slot as usize) };
     println!("{name:-16} {slot:4} ({argc} args) {file_name}",);
     offset + 3
 }

@@ -14,7 +14,7 @@ mod heap;
 mod object;
 mod opcode;
 mod scan;
-mod stack;
+mod static_vec;
 mod table;
 mod value;
 mod vm;

@@ -5,7 +5,7 @@ use crate::{
     object::{ObjFun, Object},
     opcode::Opcode,
     scan::{Kind, Line, Scanner, Token},
-    stack::Stack,
+    static_vec::StaticVec,
     value::Value,
 };
 
@@ -83,9 +83,9 @@ pub struct Parser<'src, 'vm> {
     /// The scanner for turning source bytes into tokens.
     scanner: Scanner<'src>,
     /// The compiler's state for tracking classes.
-    classes: Stack<ClassCompiler, MAX_FRAMES>,
+    classes: StaticVec<ClassCompiler, MAX_FRAMES>,
     /// The compiler's state for tracking scopes.
-    compilers: Stack<Compiler<'src>, MAX_FRAMES>,
+    compilers: StaticVec<Compiler<'src>, MAX_FRAMES>,
     /// The heap of the currently running virtual machine.
     heap: &'vm mut Heap,
 }
@@ -94,15 +94,16 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Create a new parser that reads the given source string.
     pub fn new(src: &'src str, heap: &'vm mut Heap) -> Self {
         let fun = ObjFun::new(None);
-        let mut compilers = Stack::default();
-        compilers.push(Compiler::new(fun, FunctionType::Script));
+        let mut compilers = StaticVec::default();
+        // SAFETY: We just created `compilers` and are sure that it's not full.
+        unsafe { compilers.push_unchecked(Compiler::new(fun, FunctionType::Script)) };
         Self {
             had_error: false,
             panicking: false,
             token_prev: Token::placeholder(),
             token_curr: Token::placeholder(),
             scanner: Scanner::new(src),
-            classes: Stack::default(),
+            classes: StaticVec::default(),
             compilers,
             heap,
         }
@@ -252,8 +253,15 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit_byte(name_const);
         self.define_variable(name_const);
 
-        // Keep track of the number of nesting class declarations.
-        self.classes.push(ClassCompiler::new());
+        if self.classes.len() == MAX_FRAMES {
+            self.error_prev("Too many nested classes.");
+        } else {
+            // SAFETY: We already checked if `classes` is full.
+            unsafe {
+                // Keep track of the number of nesting class declarations.
+                self.classes.push_unchecked(ClassCompiler::new());
+            };
+        }
 
         // Inherit from parent.
         if self.advance_if(Kind::Less) {
@@ -326,8 +334,16 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn function(&mut self, fun_type: FunctionType) {
         // Interned the function name and allocate a new function.
         let fun_name = self.heap.intern(String::from(self.token_prev.lexeme));
-        self.compilers
-            .push(Compiler::new(ObjFun::new(Some(fun_name)), fun_type));
+        if self.compilers.len() == MAX_FRAMES {
+            self.error_prev("Too many nested calls.");
+        } else {
+            // SAFETY: We already checked if `compilers` is full.
+            unsafe {
+                // Keep track of the number of nesting class declarations.
+                self.compilers
+                    .push_unchecked(Compiler::new(ObjFun::new(Some(fun_name)), fun_type));
+            };
+        }
 
         self.begin_scope();
         self.consume(Kind::LParen, "Expect '(' after function name.");
@@ -420,7 +436,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             depth: -1,
             is_captured: false,
         };
-        compiler.locals.push(local);
+        // SAFETY: We already checked if `locals` is full.
+        unsafe { compiler.locals.push_unchecked(local) };
     }
 
     /// Put an identifier as a string object in the list of constant.
@@ -474,7 +491,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let compiler = self.compiler_mut(0);
         // Do nothing if we are in the global scope.
         if compiler.scope_depth > 0 {
-            compiler.locals.top_mut(0).depth = compiler.scope_depth;
+            compiler.locals.last_mut(0).depth = compiler.scope_depth;
         }
     }
 
@@ -1080,7 +1097,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             unsafe {
                 self.compiler_mut(height + 1)
                     .locals
-                    .at_mut(local as usize)
+                    .get_unchecked_mut(local as usize)
                     .is_captured = true;
             }
             return Some(self.add_upvalue(height, local, true));
@@ -1111,7 +1128,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         };
         // Add the upvalue.
         let upvalue = Upvalue { is_local, index };
-        compiler.upvalues.push(upvalue);
+        // SAFETY: We already checked if `upvalues` is full.
+        unsafe { compiler.upvalues.push_unchecked(upvalue) };
         upvalue_count
     }
 
@@ -1238,12 +1256,17 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Write a constant to the currently compiling chunk.
     fn make_constant(&mut self, value: Value) -> u8 {
-        let Ok(idx) = u8::try_from(self.compiler_mut(0).fun.chunk.constants.len()) else {
-            self.error_prev("Too many constants in one chunk.");
-            return 0;
-        };
-        self.compiler_mut(0).fun.chunk.write_constant(value);
-        idx
+        self.compiler_mut(0)
+            .fun
+            .chunk
+            .write_constant(value)
+            .map_or_else(
+                || {
+                    self.error_prev("Too many constants in one chunk.");
+                    0
+                },
+                |idx| idx,
+            )
     }
 
     /// Start a new scope.
@@ -1257,7 +1280,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // Update the current scope.
         self.compiler_mut(0).scope_depth -= 1;
         while self.compiler(0).locals.len() > 0 {
-            let local = self.compiler(0).locals.top(0);
+            let local = self.compiler(0).locals.last(0);
             // End once we reach the current scope.
             if local.depth <= self.compiler(0).scope_depth {
                 break;
@@ -1275,22 +1298,22 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn class_compiler(&self, height: usize) -> &ClassCompiler {
         let index = self.classes.len() - height - 1;
-        unsafe { self.classes.at(index) }
+        unsafe { self.classes.get_unchecked(index) }
     }
 
     fn class_compiler_mut(&mut self, height: usize) -> &mut ClassCompiler {
         let index = self.classes.len() - height - 1;
-        unsafe { self.classes.at_mut(index) }
+        unsafe { self.classes.get_unchecked_mut(index) }
     }
 
     fn compiler(&self, height: usize) -> &Compiler<'src> {
         let index = self.compilers.len() - height - 1;
-        unsafe { self.compilers.at(index) }
+        unsafe { self.compilers.get_unchecked(index) }
     }
 
     fn compiler_mut(&mut self, height: usize) -> &mut Compiler<'src> {
         let index = self.compilers.len() - height - 1;
-        unsafe { self.compilers.at_mut(index) }
+        unsafe { self.compilers.get_unchecked_mut(index) }
     }
 
     /// Synchronize the parser to a normal state where we can continue parsing
@@ -1410,9 +1433,9 @@ struct Compiler<'src> {
     /// The number of "blocks" surrounding the current piece of code that we're compiling.
     scope_depth: isize,
     /// A stack of local variables sorted by the order in which they are declared.
-    locals: Stack<Local<'src>, MAX_LOCALS>,
+    locals: StaticVec<Local<'src>, MAX_LOCALS>,
     /// A stack of local variables sorted by the order in which they are declared.
-    upvalues: Stack<Upvalue, MAX_UPVALUES>,
+    upvalues: StaticVec<Upvalue, MAX_UPVALUES>,
 }
 
 impl<'src> Compiler<'src> {
@@ -1423,20 +1446,21 @@ impl<'src> Compiler<'src> {
             FunctionType::Method | FunctionType::Initializer => "this",
             _ => "",
         };
-
-        let mut locals = Stack::default();
-        locals.push(Local {
-            name: first_slot_name,
-            depth: 0,
-            is_captured: false,
-        });
-
+        let mut locals = StaticVec::default();
+        // SAFETY: We just created `locals` and are sure that it's not full.
+        unsafe {
+            locals.push_unchecked(Local {
+                name: first_slot_name,
+                depth: 0,
+                is_captured: false,
+            });
+        };
         Self {
             fun,
             fun_type,
             scope_depth: 0,
             locals,
-            upvalues: Stack::default(),
+            upvalues: StaticVec::default(),
         }
     }
 }
