@@ -1,3 +1,0 @@
-[submodule "vendor/craftinginterpreters"]
-	path = vendor/craftinginterpreters
-	url = https://github.com/munificent/craftinginterpreters.git
