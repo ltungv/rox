@@ -10,6 +10,10 @@ dbg-stress-gc = []
 dbg-execution = []
 dbg-heap = []
 
+[dependencies]
+clap = { version = "4.5.8", features = ["derive"] }
+regex = "1.10.5"
+
 [dev-dependencies]
 criterion = { version = "0.4", features = ["html_reports"] }
 pprof = { version = "0.11", features = ["criterion", "flamegraph"] }
