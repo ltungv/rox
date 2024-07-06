@@ -41,7 +41,7 @@ impl From<std::num::ParseFloatError> for Error {
 #[derive(Parser, Debug)]
 struct Args {
     #[arg(short, long)]
-    benchmark: PathBuf,
+    directory: PathBuf,
     #[arg(short, long)]
     executables: Vec<PathBuf>,
 }
@@ -61,28 +61,30 @@ where
     Ok(line.parse()?)
 }
 
-fn main() -> Result<(), Error> {
-    let args = Args::parse();
+fn compare<P>(executables: &[PathBuf], benchmark: P, iterations: usize) -> Result<(), Error>
+where
+    P: AsRef<Path>,
+{
     let mut records: HashMap<PathBuf, f64> = HashMap::default();
-    for executable in &args.executables {
+    for executable in executables {
         records.insert(executable.clone(), f64::MAX);
     }
-    for trail in 1..=10 {
+    for trail in 1..=iterations {
         let mut time_fast = f64::MAX;
         let mut time_slow = f64::MIN;
-        for executable in &args.executables {
-            let elapsed = run(executable, &args.benchmark)?;
+        for executable in executables {
+            let elapsed = run(executable, benchmark.as_ref())?;
             if let Some(record) = records.get_mut(executable) {
                 *record = record.min(elapsed);
             }
         }
-        for executable in &args.executables {
+        for executable in executables {
             let record = records[executable];
             time_fast = time_fast.min(record);
             time_slow = time_slow.max(record);
         }
         println!("trail #{trail} ({time_slow:.3}s - {time_fast:.3}s)");
-        for executable in &args.executables {
+        for executable in executables {
             let record = records[executable];
             let suffix = if record == time_fast {
                 let percent_vs_slow = 100.0 * (time_slow / time_fast - 1.0);
@@ -94,6 +96,29 @@ fn main() -> Result<(), Error> {
             println!("{:<48} {record:.3}s {suffix}", executable.to_string_lossy());
         }
         println!();
+    }
+    Ok(())
+}
+
+fn main() -> Result<(), Error> {
+    let args = Args::parse();
+    for entry in std::fs::read_dir(args.directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_file() {
+            if let Some(ext) = path.extension() {
+                if ext == "lox" {
+                    println!("#");
+                    println!("Comparing with '{}'.", path.to_string_lossy());
+                    println!("#");
+                    if let Err(err) = compare(&args.executables, path, 10) {
+                        println!("Failed to compare: {err}");
+                        println!();
+                    }
+                }
+            };
+        }
     }
     Ok(())
 }
