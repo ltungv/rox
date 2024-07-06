@@ -11,32 +11,24 @@
 use std::{
     collections::{HashSet, VecDeque},
     ffi::OsString,
-    fmt,
-    fs::{self, File},
+    fs::File,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::Command,
     sync::OnceLock,
 };
 
-use clap::{command, Parser};
+use clap::Parser;
 use regex::{Captures, Regex};
 
 fn make_regex(pattern: &str) -> Regex {
-    Regex::new(pattern).expect("Invalid regular expression")
+    Regex::new(pattern).expect("Invalid regular expression.")
 }
 
 fn parse_expected_output(s: &str) -> Option<Captures<'_>> {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     PATTERN
         .get_or_init(|| make_regex(r"// expect: ?(.*)"))
-        .captures(s)
-}
-
-fn parse_expected_compile_error(s: &str) -> Option<Captures<'_>> {
-    static PATTERN: OnceLock<Regex> = OnceLock::new();
-    PATTERN
-        .get_or_init(|| make_regex(r"// (\[((java|c) )?line (\d+)\] )?(Error.*)"))
         .captures(s)
 }
 
@@ -47,10 +39,10 @@ fn parse_expected_runtime_error(s: &str) -> Option<Captures<'_>> {
         .captures(s)
 }
 
-fn parse_syntax_error(s: &str) -> Option<Captures<'_>> {
+fn parse_expected_compile_error(s: &str) -> Option<Captures<'_>> {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     PATTERN
-        .get_or_init(|| make_regex(r"\[.*line (\d+)\] (Error.+)"))
+        .get_or_init(|| make_regex(r"// (\[((java|c) )?line (\d+)\] )?(Error.*)"))
         .captures(s)
 }
 
@@ -58,6 +50,13 @@ fn parse_stack_trace(s: &str) -> Option<Captures<'_>> {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     PATTERN
         .get_or_init(|| make_regex(r"\[line (\d+)\]"))
+        .captures(s)
+}
+
+fn parse_syntax_error(s: &str) -> Option<Captures<'_>> {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| make_regex(r"\[.*line (\d+)\] (Error.+)"))
         .captures(s)
 }
 
@@ -75,7 +74,7 @@ enum Error {
 impl std::error::Error for Error {}
 
 impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::IO(err) => write!(f, "{err}"),
             Self::ParseInt(err) => write!(f, "{err}"),
@@ -98,15 +97,15 @@ impl From<std::num::ParseIntError> for Error {
 
 #[derive(Debug)]
 struct ExpectedLine {
-    data: String,
-    number: usize,
+    num: usize,
+    msg: String,
 }
 
 impl ExpectedLine {
-    fn new(data: &str, number: usize) -> Self {
+    fn new(num: usize, msg: &str) -> Self {
         Self {
-            data: data.to_string(),
-            number,
+            num,
+            msg: msg.to_string(),
         }
     }
 }
@@ -135,31 +134,30 @@ impl Test {
         let reader = BufReader::new(File::open(path)?);
         for (idx, line) in reader.lines().enumerate() {
             let line = line?;
-            let line_number = idx + 1;
+            let lnum = idx + 1;
             if is_non_test(&line) {
                 return Ok(None);
             }
             if let Some(captures) = parse_expected_output(&line) {
                 if let Some(message) = captures.get(1) {
                     test.expected_output
-                        .push(ExpectedLine::new(message.as_str(), line_number));
+                        .push(ExpectedLine::new(lnum, message.as_str()));
                 }
             } else if let Some(captures) = parse_expected_runtime_error(&line) {
                 if let Some(message) = captures.get(1) {
                     test.expected_exit_code = 70;
-                    test.expected_runtime_error =
-                        Some(ExpectedLine::new(message.as_str(), line_number));
+                    test.expected_runtime_error = Some(ExpectedLine::new(lnum, message.as_str()));
                 }
             } else if let Some(captures) = parse_expected_compile_error(&line) {
                 let language = captures.get(3);
                 if language.is_none() || language.is_some_and(|l| l.as_str() == "c") {
-                    let line_number = captures.get(4).map_or(line_number, |m| {
-                        m.as_str().parse().expect("Invalid line number")
-                    });
+                    let lnum = captures
+                        .get(4)
+                        .map_or(lnum, |m| m.as_str().parse().expect("Invalid line number."));
                     if let Some(message) = captures.get(5) {
                         test.expected_exit_code = 65;
                         test.expected_compile_error
-                            .insert(format!("[{line_number}] {}", message.as_str()));
+                            .insert(format!("[{lnum}] {}", message.as_str()));
                     }
                 }
             }
@@ -217,17 +215,17 @@ impl Test {
                 failures.push(format!("Got output '{line}' when none was expected."));
                 continue;
             };
-            if *line != expected_output.data {
+            if *line != expected_output.msg {
                 failures.push(format!(
                     "Expected output '{}' on line {} and got '{line}'.",
-                    expected_output.data, expected_output.number
+                    expected_output.msg, expected_output.num
                 ));
             }
         }
         for expected_output in &self.expected_output[lines.len()..] {
             failures.push(format!(
                 "Missing expected output '{}' on line {}.",
-                expected_output.data, expected_output.number
+                expected_output.msg, expected_output.num
             ));
         }
     }
@@ -237,14 +235,14 @@ impl Test {
             if lines.len() < 2 {
                 failures.push(format!(
                     "Expected runtime error '{}' and got none.",
-                    expected_output.data
+                    expected_output.msg
                 ));
                 return;
             }
-            if lines[0] != expected_output.data {
+            if lines[0] != expected_output.msg {
                 failures.push(format!(
                     "Expected runtime error '{}' and got:",
-                    expected_output.data,
+                    expected_output.msg,
                 ));
                 failures.push(lines[0].clone());
                 return;
@@ -264,15 +262,15 @@ impl Test {
             let Some(line_number) = stack_trace_captures.get(1) else {
                 failures.push(format!(
                     "Expected line number {} in stack trace and got none.",
-                    expected_output.data
+                    expected_output.msg
                 ));
                 return;
             };
-            let line_number: usize = line_number.as_str().parse().expect("Invalid line number");
-            if line_number != expected_output.number {
+            let line_number: usize = line_number.as_str().parse().expect("Invalid line number.");
+            if line_number != expected_output.num {
                 failures.push(format!(
                     "Expected runtime error on line {} but was on line {}.",
-                    expected_output.number, line_number
+                    expected_output.num, line_number
                 ));
             }
         })
@@ -324,7 +322,7 @@ impl Suite {
                 .components()
                 .any(|c| skipped_directories.contains(c.as_os_str()))
             {
-                for entry in fs::read_dir(&directory)? {
+                for entry in std::fs::read_dir(&directory)? {
                     let entry = entry?;
                     let path = entry.path();
                     let file_type = entry.file_type()?;
@@ -383,7 +381,6 @@ impl Suite {
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
 struct Args {
     #[arg(short, long)]
     directory: PathBuf,

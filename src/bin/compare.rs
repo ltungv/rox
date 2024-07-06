@@ -1,0 +1,99 @@
+use std::{
+    collections::HashMap,
+    io::BufRead,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use clap::Parser;
+
+#[derive(Debug)]
+enum Error {
+    IO(std::io::Error),
+    MissingOutput,
+    ParseFloat(std::num::ParseFloatError),
+}
+
+impl std::error::Error for Error {}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IO(err) => write!(f, "{err}"),
+            Self::MissingOutput => write!(f, "Missing output."),
+            Self::ParseFloat(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(value: std::io::Error) -> Self {
+        Self::IO(value)
+    }
+}
+
+impl From<std::num::ParseFloatError> for Error {
+    fn from(value: std::num::ParseFloatError) -> Self {
+        Self::ParseFloat(value)
+    }
+}
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short, long)]
+    benchmark: PathBuf,
+    #[arg(short, long)]
+    executables: Vec<PathBuf>,
+}
+
+fn run<P1, P2>(executable: P1, benchmark: P2) -> Result<f64, Error>
+where
+    P1: AsRef<Path>,
+    P2: AsRef<Path>,
+{
+    let mut command = Command::new(executable.as_ref());
+    let command_output = command.arg(benchmark.as_ref()).output()?;
+    let line = command_output
+        .stdout
+        .lines()
+        .last()
+        .ok_or(Error::MissingOutput)??;
+    Ok(line.parse()?)
+}
+
+fn main() -> Result<(), Error> {
+    let args = Args::parse();
+    let mut records: HashMap<PathBuf, f64> = HashMap::default();
+    for executable in &args.executables {
+        records.insert(executable.clone(), f64::MAX);
+    }
+    for trail in 1..=10 {
+        let mut time_fast = f64::MAX;
+        let mut time_slow = f64::MIN;
+        for executable in &args.executables {
+            let elapsed = run(executable, &args.benchmark)?;
+            if let Some(record) = records.get_mut(executable) {
+                *record = record.min(elapsed);
+            }
+        }
+        for executable in &args.executables {
+            let record = records[executable];
+            time_fast = time_fast.min(record);
+            time_slow = time_slow.max(record);
+        }
+        println!("trail #{trail} ({time_slow:.3}s - {time_fast:.3}s)");
+        for executable in &args.executables {
+            let record = records[executable];
+            let suffix = if record == time_fast {
+                let percent_vs_slow = 100.0 * (time_slow / time_fast - 1.0);
+                format!("{percent_vs_slow:.3}% faster")
+            } else {
+                let ratio_vs_fast = record / time_fast;
+                format!("{ratio_vs_fast:.3}x of fastest")
+            };
+            println!("{:<48} {record:.3}s {suffix}", executable.to_string_lossy());
+        }
+        println!();
+    }
+    Ok(())
+}
