@@ -10,6 +10,7 @@
 
 use std::{
     collections::{HashSet, VecDeque},
+    ffi::OsString,
     fmt,
     fs::{self, File},
     io::{BufRead, BufReader},
@@ -306,12 +307,12 @@ impl Test {
 
 #[derive(Debug, Default)]
 struct Suite {
-    expectations: usize,
     tests: Vec<Test>,
+    expectations: usize,
 }
 
 impl Suite {
-    fn parse<P>(root: P) -> Result<Self, Error>
+    fn parse<P>(root: P, skipped_directories: &HashSet<OsString>) -> Result<Self, Error>
     where
         P: AsRef<Path>,
     {
@@ -319,10 +320,10 @@ impl Suite {
         let mut directories = VecDeque::default();
         directories.push_back(root.as_ref().to_path_buf());
         while let Some(directory) = directories.pop_front() {
-            if !directory.components().any(|c| {
-                let c = c.as_os_str();
-                c == "benchmark" || c == "scanning" || c == "expressions"
-            }) {
+            if !directory
+                .components()
+                .any(|c| skipped_directories.contains(c.as_os_str()))
+            {
                 for entry in fs::read_dir(&directory)? {
                     let entry = entry?;
                     let path = entry.path();
@@ -392,5 +393,9 @@ struct Args {
 
 fn main() -> Result<(), Error> {
     let args = Args::parse();
-    Suite::parse(args.directory)?.run(args.executable)
+    let mut skipped_directories = HashSet::default();
+    skipped_directories.insert("benchmark".into());
+    skipped_directories.insert("expressions".into());
+    skipped_directories.insert("scanning".into());
+    Suite::parse(args.directory, &skipped_directories)?.run(args.executable)
 }
