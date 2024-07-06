@@ -9,7 +9,7 @@
 #![deny(clippy::all, missing_docs, rust_2018_idioms, rust_2021_compatibility)]
 
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     fmt,
     fs::{self, File},
     io::{BufRead, BufReader},
@@ -316,8 +316,9 @@ impl Suite {
         P: AsRef<Path>,
     {
         let mut suite = Self::default();
-        let mut directories = vec![root.as_ref().to_path_buf()];
-        while let Some(directory) = directories.pop() {
+        let mut directories = VecDeque::default();
+        directories.push_back(root.as_ref().to_path_buf());
+        while let Some(directory) = directories.pop_front() {
             if !directory.components().any(|c| {
                 let c = c.as_os_str();
                 c == "benchmark" || c == "scanning" || c == "expressions"
@@ -327,7 +328,7 @@ impl Suite {
                     let path = entry.path();
                     let file_type = entry.file_type()?;
                     if file_type.is_dir() {
-                        directories.push(path);
+                        directories.push_back(path);
                     } else if file_type.is_file() {
                         if let Some(ext) = path.extension() {
                             if ext == "lox" {
