@@ -81,7 +81,7 @@ impl<V> Table<V> {
             match &entry {
                 Entry::Vacant => return None,
                 Entry::Occupied(e) => {
-                    if e.key.data == s {
+                    if e.key.as_ref().data == s {
                         return Some(e.key);
                     }
                 }
@@ -108,7 +108,7 @@ impl<V> Table<V> {
     /// have the same hash, linear probing is used to find the correct entry.
     fn probe(&self, key: RefString) -> *mut Entry<V> {
         let mut tombstone = None;
-        let mut index = key.hash as usize & (self.capacity - 1);
+        let mut index = key.as_ref().hash as usize & (self.capacity - 1);
         loop {
             // SAFETY: `index` is always less than `self.capacity` because `index = x mod self.capacity`,
             // where `x` is an arbitrary integer value.
@@ -418,7 +418,7 @@ mod tests {
         let mut heap = Heap::default();
         let key = heap.intern("key".to_string());
 
-        let s = table.find(&key.data, key.hash);
+        let s = table.find(&key.as_ref().data, key.as_ref().hash);
         assert!(s.is_none());
     }
 
@@ -432,8 +432,8 @@ mod tests {
         table.set(key1, Value::Nil);
         table.set(key2, Value::Nil);
 
-        let s1 = table.find(&key1.data, key1.hash).unwrap();
-        let s2 = table.find(&key2.data, key2.hash).unwrap();
+        let s1 = table.find(&key1.as_ref().data, key1.as_ref().hash).unwrap();
+        let s2 = table.find(&key2.as_ref().data, key2.as_ref().hash).unwrap();
         assert!(Gc::ptr_eq(s1, key1));
         assert!(Gc::ptr_eq(s2, key2));
     }

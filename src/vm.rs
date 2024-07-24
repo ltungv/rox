@@ -1,7 +1,6 @@
 //! Implementation of the bytecode virtual machine.
 
 use std::{
-    cell::RefCell,
     error, fmt,
     ops::{Add, Div, Mul, Neg, Not, Sub},
     ptr::NonNull,
@@ -199,12 +198,19 @@ impl VirtualMachine {
                 self.trace_stack();
                 let frame = self.frame();
                 let offset = unsafe {
-                    frame
-                        .ip
-                        .offset_from(frame.closure.fun.chunk.instructions.as_ptr())
+                    frame.ip.offset_from(
+                        frame
+                            .closure
+                            .as_ref()
+                            .fun
+                            .as_ref()
+                            .chunk
+                            .instructions
+                            .as_ptr(),
+                    )
                 };
                 disassemble_instruction(
-                    &frame.closure.fun.chunk,
+                    &frame.closure.as_ref().fun.as_ref().chunk,
                     usize::try_from(offset).expect("invalid ip."),
                 );
             }
@@ -280,11 +286,11 @@ impl VirtualMachine {
             .as_instance()
             .map_err(|_| RuntimeError::InvalidMethodInvocation)?;
 
-        if let Some(field) = instance.borrow().fields.get(method) {
+        if let Some(field) = instance.as_ref().fields.get(method) {
             *self.stack_top_mut(argc as usize) = *field;
             self.call_value(*field, argc)?;
         } else {
-            self.invoke_from_class(instance.borrow().class, method, argc)?;
+            self.invoke_from_class(instance.as_ref().class, method, argc)?;
         }
 
         Ok(())
@@ -296,11 +302,12 @@ impl VirtualMachine {
         name: RefString,
         argc: u8,
     ) -> Result<(), RuntimeError> {
-        let class_ref = class.borrow();
+        let class_ref = class;
         let method = class_ref
+            .as_ref()
             .methods
             .get(name)
-            .ok_or_else(|| RuntimeError::UndefinedProperty(name.to_string()))?;
+            .ok_or_else(|| RuntimeError::UndefinedProperty(name.as_ref().to_string()))?;
         self.call_closure(*method, argc)?;
         Ok(())
     }
@@ -310,13 +317,13 @@ impl VirtualMachine {
     fn method(&mut self) -> Result<(), RuntimeError> {
         let name = self.read_constant().as_string()?;
         let closure = self.stack_pop().as_closure()?;
-        let class = self.stack_top(0).as_class()?;
-        class.borrow_mut().methods.set(name, closure);
+        let mut class = self.stack_top(0).as_class()?;
+        class.as_mut().methods.set(name, closure);
         Ok(())
     }
 
     fn bind_method(&mut self, class: RefClass, name: RefString) -> Result<bool, RuntimeError> {
-        match class.borrow().methods.get(name) {
+        match class.as_ref().methods.get(name) {
             Some(method) => {
                 let (bound, _) = self.alloc_bound_method(ObjBoundMethod {
                     receiver: *self.stack_top(0),
@@ -337,27 +344,26 @@ impl VirtualMachine {
             .as_instance()
             .map_err(|_| RuntimeError::ObjectHasNoProperty)?;
 
-        let instance = instance.borrow();
-        if let Some(value) = instance.fields.get(name) {
+        if let Some(value) = instance.as_ref().fields.get(name) {
             self.stack_pop();
             self.stack_push(*value)?;
             Ok(())
-        } else if self.bind_method(instance.class, name)? {
+        } else if self.bind_method(instance.as_ref().class, name)? {
             Ok(())
         } else {
-            Err(RuntimeError::UndefinedProperty(name.to_string()))
+            Err(RuntimeError::UndefinedProperty(name.as_ref().to_string()))
         }
     }
 
     fn set_property(&mut self) -> Result<(), RuntimeError> {
         let name = self.read_constant().as_string()?;
         let value = self.stack_pop();
-        let instance = self
+        let mut instance = self
             .stack_top(0)
             .as_instance()
             .map_err(|_| RuntimeError::ObjectHasNoField)?;
 
-        instance.borrow_mut().fields.set(name, value);
+        instance.as_mut().fields.set(name, value);
         self.stack_pop();
         self.stack_push(value)?;
         Ok(())
@@ -367,7 +373,7 @@ impl VirtualMachine {
         let name = self.read_constant().as_string()?;
         let superclass = self.stack_pop().as_class()?;
         if !self.bind_method(superclass, name)? {
-            return Err(RuntimeError::UndefinedProperty(name.to_string()));
+            return Err(RuntimeError::UndefinedProperty(name.as_ref().to_string()));
         }
         Ok(())
     }
@@ -384,9 +390,9 @@ impl VirtualMachine {
             .stack_top(1)
             .as_class()
             .map_err(|_| RuntimeError::InvalidSuperclass)?;
-        let subclass = self.stack_top(0).as_class()?;
-        for (method_name, method) in &superclass.borrow().methods {
-            subclass.borrow_mut().methods.set(*method_name, *method);
+        let mut subclass = self.stack_top(0).as_class()?;
+        for (method_name, method) in &superclass.as_ref().methods {
+            subclass.as_mut().methods.set(*method_name, *method);
         }
         self.stack_pop();
         Ok(())
@@ -395,18 +401,18 @@ impl VirtualMachine {
     /// Get the value of the variable capture by an upvalue.
     fn get_upvalue(&mut self) -> Result<(), RuntimeError> {
         let upvalue_slot = self.read_byte();
-        let upvalue = self.frame().closure.upvalues[upvalue_slot as usize];
-        match *upvalue.borrow() {
+        let upvalue = self.frame().closure.as_ref().upvalues[upvalue_slot as usize];
+        match upvalue.as_ref() {
             // Value is on the stack.
             ObjUpvalue::Open(stack_slot) => {
                 // SAFETY: The compiler should produce safe byte codes such that we never
                 // access uninitialized data.
-                let value = unsafe { self.stack.get_unchecked(stack_slot) };
+                let value = unsafe { self.stack.get_unchecked(*stack_slot) };
                 self.stack_push(*value)?;
             }
             // Value is on the heap.
             ObjUpvalue::Closed(value) => {
-                self.stack_push(value)?;
+                self.stack_push(*value)?;
             }
         }
         Ok(())
@@ -417,12 +423,12 @@ impl VirtualMachine {
         let upvalue_slot = self.read_byte();
         let value = *self.stack_top(0);
         let stack_slot = {
-            let mut upvalue = self.frame().closure.upvalues[upvalue_slot as usize].borrow_mut();
-            match &mut *upvalue {
+            let mut upvalue = self.frame().closure.as_ref().upvalues[upvalue_slot as usize];
+            match upvalue.as_mut() {
                 // Value is on the stack.
                 ObjUpvalue::Open(stack_slot) => Some(*stack_slot),
                 // Value is on the heap.
-                ObjUpvalue::Closed(v) => {
+                ObjUpvalue::Closed(ref mut v) => {
                     *v = value;
                     None
                 }
@@ -437,14 +443,14 @@ impl VirtualMachine {
 
     fn closure(&mut self) -> Result<(), RuntimeError> {
         let fun = self.read_constant().as_fun()?;
-        let mut upvalues = Vec::with_capacity(fun.upvalue_count);
-        for _ in 0..fun.upvalue_count {
+        let mut upvalues = Vec::with_capacity(fun.as_ref().upvalue_count);
+        for _ in 0..upvalues.capacity() {
             let is_local = self.read_byte() == 1;
             let index = self.read_byte() as usize;
             if is_local {
                 upvalues.push(self.capture_upvalue(self.frame().slot + index));
             } else {
-                upvalues.push(self.frame().closure.upvalues[index]);
+                upvalues.push(self.frame().closure.as_ref().upvalues[index]);
             }
         }
 
@@ -465,8 +471,8 @@ impl VirtualMachine {
         // to close over a variable not a value. Thus, closures can shared data through the same
         // captured variable.
         for upvalue in &self.open_upvalues {
-            if let ObjUpvalue::Open(loc) = *upvalue.borrow() {
-                if loc == location {
+            if let ObjUpvalue::Open(loc) = upvalue.as_ref() {
+                if *loc == location {
                     return *upvalue;
                 }
             }
@@ -480,23 +486,22 @@ impl VirtualMachine {
     // Close all upvalues whose referenced stack slot went out of scope. Here, `last` is the lowest
     // stack slot that went out of scope.
     fn close_upvalues(&mut self, last: usize) {
-        for upvalue in &self.open_upvalues {
+        for upvalue in &mut self.open_upvalues {
             // Check if we reference a slot that went out of scope.
-            let mut upvalue = upvalue.borrow_mut();
-            let stack_slot = match *upvalue {
-                ObjUpvalue::Open(slot) if slot >= last => Some(slot),
+            let stack_slot = match upvalue.as_ref() {
+                ObjUpvalue::Open(slot) if *slot >= last => Some(*slot),
                 _ => None,
             };
             // Hoist the variable up into the upvalue so it can live after the stack frame is pop.
             if let Some(slot) = stack_slot {
                 // SAFETY: The compiler should produce safe code that access a safe part of the stack.
                 let v = unsafe { self.stack.get_unchecked(slot) };
-                *upvalue = ObjUpvalue::Closed(*v);
+                *upvalue.as_mut() = ObjUpvalue::Closed(*v);
             }
         }
         // remove closed upvalues from list of open upvalues
         self.open_upvalues
-            .retain(|v| matches!(&*v.borrow(), ObjUpvalue::Open(_)));
+            .retain(|v| matches!(v.as_ref(), ObjUpvalue::Open(_)));
     }
 
     /// Return from a function call
@@ -545,15 +550,15 @@ impl VirtualMachine {
     }
 
     fn call_closure(&mut self, callee: RefClosure, argc: u8) -> Result<(), RuntimeError> {
-        if argc != callee.fun.arity {
+        if argc != callee.as_ref().fun.as_ref().arity {
             return Err(RuntimeError::InvalidArgumentsCount {
-                arity: callee.fun.arity,
+                arity: callee.as_ref().fun.as_ref().arity,
                 argc,
             });
         }
         let frame = CallFrame {
             closure: callee,
-            ip: callee.fun.chunk.instructions.as_ptr(),
+            ip: callee.as_ref().fun.as_ref().chunk.instructions.as_ptr(),
             slot: self.stack.len() - argc as usize - 1,
         };
         self.frames_push(frame)?;
@@ -561,14 +566,14 @@ impl VirtualMachine {
     }
 
     fn call_native(&mut self, callee: RefNativeFun, argc: u8) -> Result<(), RuntimeError> {
-        if argc != callee.arity {
+        if argc != callee.as_ref().arity {
             return Err(RuntimeError::InvalidArgumentsCount {
-                arity: callee.arity,
+                arity: callee.as_ref().arity,
                 argc,
             });
         }
         let argc = argc as usize;
-        let call = callee.call;
+        let call = callee.as_ref().call;
         let res = call(self.stack.last_chunk(argc));
         self.stack_remove_top(argc + 1);
         self.stack_push(res)?;
@@ -580,7 +585,7 @@ impl VirtualMachine {
         let (instance, _) = self.alloc_instance(ObjInstance::new(callee));
         *self.stack_top_mut(argc.into()) = Value::Object(instance);
         // Call the 'init' method if there's one
-        if let Some(init) = callee.borrow().methods.get(self.str_init) {
+        if let Some(init) = callee.as_ref().methods.get(self.str_init) {
             self.call_closure(*init, argc)?;
         } else if argc != 0 {
             return Err(RuntimeError::InvalidArgumentsCount { arity: 0, argc });
@@ -589,8 +594,8 @@ impl VirtualMachine {
     }
 
     fn call_bound_method(&mut self, callee: RefBoundMethod, argc: u8) -> Result<(), RuntimeError> {
-        *self.stack_top_mut(argc as usize) = callee.receiver;
-        self.call_closure(callee.method, argc)?;
+        *self.stack_top_mut(argc as usize) = callee.as_ref().receiver;
+        self.call_closure(callee.as_ref().method, argc)?;
         Ok(())
     }
 
@@ -649,7 +654,7 @@ impl VirtualMachine {
         let value = self
             .globals
             .get(name)
-            .ok_or_else(|| RuntimeError::UndefinedVariable(name.to_string()))?;
+            .ok_or_else(|| RuntimeError::UndefinedVariable(name.as_ref().to_string()))?;
         self.stack_push(*value)?;
         Ok(())
     }
@@ -659,7 +664,7 @@ impl VirtualMachine {
         let name = self.read_constant().as_string()?;
         let value = self.stack_top(0);
         if self.globals.get(name).is_none() {
-            return Err(RuntimeError::UndefinedVariable(name.to_string()));
+            return Err(RuntimeError::UndefinedVariable(name.as_ref().to_string()));
         }
         self.globals.set(name, *value);
         Ok(())
@@ -729,9 +734,10 @@ impl VirtualMachine {
             // Operations on objects might allocate a new one.
             (Value::Object(o1), Value::Object(o2)) => match (o1, o2) {
                 (Object::String(s1), Object::String(s2)) => {
-                    let mut s = String::with_capacity(s1.data.len() + s1.data.len());
-                    s.push_str(s1.data.as_ref());
-                    s.push_str(s2.data.as_ref());
+                    let mut s =
+                        String::with_capacity(s1.as_ref().data.len() + s1.as_ref().data.len());
+                    s.push_str(s1.as_ref().data.as_ref());
+                    s.push_str(s2.as_ref().data.as_ref());
                     let (object, _) = self.alloc_string(s);
                     Value::Object(object)
                 }
@@ -813,7 +819,7 @@ impl VirtualMachine {
 
     fn mark_sweep(&mut self) {
         self.mark_roots();
-        while let Some(grey_object) = self.grey_objects.pop() {
+        while let Some(mut grey_object) = self.grey_objects.pop() {
             grey_object.mark_references(&mut self.grey_objects);
         }
         // SAFETY: We make sure that the sweep step has correctly mark all reachable objects, so
@@ -929,17 +935,37 @@ impl VirtualMachine {
         for frame in self.frames.into_iter().rev() {
             let offset = unsafe {
                 usize::try_from(
-                    frame
-                        .ip
-                        .offset_from(frame.closure.fun.chunk.instructions.as_ptr()),
+                    frame.ip.offset_from(
+                        frame
+                            .closure
+                            .as_ref()
+                            .fun
+                            .as_ref()
+                            .chunk
+                            .instructions
+                            .as_ptr(),
+                    ),
                 )
                 .expect("invalid ip.")
             };
-            let line = frame.closure.fun.chunk.get_line(offset - 1);
-            frame.closure.fun.name.as_ref().map_or_else(
-                || eprintln!("{line} in script."),
-                |s| eprintln!("{line} in {}().", s.data),
-            );
+            let line = frame
+                .closure
+                .as_ref()
+                .fun
+                .as_ref()
+                .chunk
+                .get_line(offset - 1);
+            frame
+                .closure
+                .as_ref()
+                .fun
+                .as_ref()
+                .name
+                .as_ref()
+                .map_or_else(
+                    || eprintln!("{line} in script."),
+                    |s| eprintln!("{line} in {}().", s.as_ref().data),
+                );
         }
     }
 
@@ -968,7 +994,7 @@ impl VirtualMachine {
 
     fn alloc_upvalue(&mut self, upvalue: ObjUpvalue) -> (Object, RefUpvalue) {
         self.gc();
-        self.heap.alloc(RefCell::new(upvalue), Object::Upvalue)
+        self.heap.alloc(upvalue, Object::Upvalue)
     }
 
     fn alloc_closure(&mut self, closure: ObjClosure) -> (Object, RefClosure) {
@@ -988,12 +1014,12 @@ impl VirtualMachine {
 
     fn alloc_class(&mut self, class: ObjClass) -> (Object, RefClass) {
         self.gc();
-        self.heap.alloc(RefCell::new(class), Object::Class)
+        self.heap.alloc(class, Object::Class)
     }
 
     fn alloc_instance(&mut self, instance: ObjInstance) -> (Object, RefInstance) {
         self.gc();
-        self.heap.alloc(RefCell::new(instance), Object::Instance)
+        self.heap.alloc(instance, Object::Instance)
     }
 
     fn alloc_bound_method(&mut self, method: ObjBoundMethod) -> (Object, RefBoundMethod) {
@@ -1049,7 +1075,9 @@ impl CallFrame {
         self.ip = self.ip.add(1);
         *self
             .closure
+            .as_ref()
             .fun
+            .as_ref()
             .chunk
             .constants
             .get_unchecked(constant_id as usize)

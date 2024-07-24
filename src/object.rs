@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     error, fmt, mem,
     ops::{self, BitXor, Deref},
     ptr::NonNull,
@@ -11,7 +11,7 @@ use crate::{chunk::Chunk, table::Table, value::Value};
 pub type RefString = Gc<ObjString>;
 
 /// A type alias for a heap-allocated upvalue.
-pub type RefUpvalue = Gc<RefCell<ObjUpvalue>>;
+pub type RefUpvalue = Gc<ObjUpvalue>;
 
 /// A type alias for a heap-allocated closure.
 pub type RefClosure = Gc<ObjClosure>;
@@ -23,10 +23,10 @@ pub type RefFun = Gc<ObjFun>;
 pub type RefNativeFun = Gc<ObjNativeFun>;
 
 /// A type alias for a heap-allocated class definition.
-pub type RefClass = Gc<RefCell<ObjClass>>;
+pub type RefClass = Gc<ObjClass>;
 
 /// A type alias for a heap-allocated class instance.
-pub type RefInstance = Gc<RefCell<ObjInstance>>;
+pub type RefInstance = Gc<ObjInstance>;
 
 /// A type alias for a heap-allocated bound method.
 pub type RefBoundMethod = Gc<ObjBoundMethod>;
@@ -116,14 +116,14 @@ impl Object {
 
     /// Mark all object references that can be directly access by the current object and put them
     /// in `grey_objects` if they have not been marked.
-    pub fn mark_references(&self, grey_objects: &mut Vec<Self>) {
-        match &self {
-            Self::Upvalue(upvalue) => upvalue.borrow().mark_references(grey_objects),
-            Self::Closure(closure) => closure.mark_references(grey_objects),
-            Self::Fun(fun) => fun.mark_references(grey_objects),
-            Self::Class(class) => class.borrow().mark_references(grey_objects),
-            Self::Instance(instance) => instance.borrow().mark_references(grey_objects),
-            Self::BoundMethod(method) => method.mark_references(grey_objects),
+    pub fn mark_references(&mut self, grey_objects: &mut Vec<Self>) {
+        match self {
+            Self::Upvalue(upvalue) => upvalue.as_mut().mark_references(grey_objects),
+            Self::Closure(closure) => closure.as_mut().mark_references(grey_objects),
+            Self::Fun(fun) => fun.as_mut().mark_references(grey_objects),
+            Self::Class(class) => class.as_mut().mark_references(grey_objects),
+            Self::Instance(instance) => instance.as_mut().mark_references(grey_objects),
+            Self::BoundMethod(method) => method.as_mut().mark_references(grey_objects),
             Self::String(_) | Self::NativeFun(_) => {}
         }
     }
@@ -189,14 +189,14 @@ impl GcSized for Object {
 impl fmt::Display for Object {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::String(s) => write!(f, "{}", ***s),
-            Self::Upvalue(v) => write!(f, "{}", (***v).borrow()),
-            Self::Closure(c) => write!(f, "{}", ***c),
-            Self::Fun(fun) => write!(f, "{}", ***fun),
-            Self::NativeFun(fun) => write!(f, "{}", ***fun),
-            Self::Class(c) => write!(f, "{}", (***c).borrow()),
-            Self::Instance(i) => write!(f, "{}", (***i).borrow()),
-            Self::BoundMethod(m) => write!(f, "{}", ***m),
+            Self::String(s) => write!(f, "{}", s.as_ref()),
+            Self::Upvalue(v) => write!(f, "{}", v.as_ref()),
+            Self::Closure(c) => write!(f, "{}", c.as_ref()),
+            Self::Fun(fun) => write!(f, "{}", fun.as_ref()),
+            Self::NativeFun(fun) => write!(f, "{}", fun.as_ref()),
+            Self::Class(c) => write!(f, "{}", c.as_ref()),
+            Self::Instance(i) => write!(f, "{}", i.as_ref()),
+            Self::BoundMethod(m) => write!(f, "{}", m.as_ref()),
         }
     }
 }
@@ -270,7 +270,7 @@ impl GcSized for ObjClosure {
 
 impl fmt::Display for ObjClosure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "{}", **self.fun)
+        write!(f, "{}", self.fun.as_ref())
     }
 }
 
@@ -471,7 +471,7 @@ impl GcSized for ObjInstance {
 
 impl fmt::Display for ObjInstance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} instance", (**self.class).borrow())
+        write!(f, "{} instance", self.class.as_ref())
     }
 }
 
@@ -502,18 +502,12 @@ impl GcSized for ObjBoundMethod {
 
 impl fmt::Display for ObjBoundMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", **self.method)
+        write!(f, "{}", self.method.as_ref())
     }
 }
 
 pub trait GcSized {
     fn size(&self) -> usize;
-}
-
-impl<T: GcSized> GcSized for RefCell<T> {
-    fn size(&self) -> usize {
-        self.borrow().size()
-    }
 }
 
 #[derive(Debug)]
@@ -557,13 +551,31 @@ impl<T> GcData<T> {
     }
 }
 
-impl<T> ops::Deref for GcData<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
+impl<T> AsRef<T> for GcData<T> {
+    fn as_ref(&self) -> &T {
         &self.data
     }
 }
+
+impl<T> AsMut<T> for GcData<T> {
+    fn as_mut(&mut self) -> &mut T {
+        &mut self.data
+    }
+}
+
+// impl<T> ops::Deref for GcData<T> {
+//     type Target = T;
+//
+//     fn deref(&self) -> &Self::Target {
+//         &self.data
+//     }
+// }
+//
+// impl<T> ops::DerefMut for GcData<T> {
+//     fn deref_mut(&mut self) -> &mut Self::Target {
+//         &mut self.data
+//     }
+// }
 
 impl<T: GcSized> GcSized for GcData<T> {
     fn size(&self) -> usize {
@@ -608,6 +620,12 @@ impl<T> ops::Deref for Gc<T> {
 
     fn deref(&self) -> &Self::Target {
         unsafe { self.ptr.as_ref() }
+    }
+}
+
+impl<T> ops::DerefMut for Gc<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { self.ptr.as_mut() }
     }
 }
 
