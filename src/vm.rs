@@ -832,22 +832,22 @@ impl VirtualMachine {
         if self.str_init.mark() {
             self.grey_objects.push(Object::String(self.str_init));
         }
-        for value in &self.stack {
+        for value in &mut self.stack {
             if let Value::Object(o) = value {
                 o.mark(&mut self.grey_objects);
             }
         }
-        for frame in &self.frames {
+        for frame in &mut self.frames {
             if frame.closure.mark() {
                 self.grey_objects.push(Object::Closure(frame.closure));
             }
         }
-        for upvalue in &self.open_upvalues {
+        for upvalue in &mut self.open_upvalues {
             if upvalue.mark() {
                 self.grey_objects.push(Object::Upvalue(*upvalue));
             }
         }
-        for (k, v) in &self.globals {
+        for (k, v) in &mut self.globals {
             if k.mark() {
                 self.grey_objects.push(Object::String(*k));
             }

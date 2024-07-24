@@ -1,5 +1,4 @@
 use std::{
-    cell::Cell,
     error, fmt, mem,
     ops::{self, BitXor, Deref},
     ptr::NonNull,
@@ -70,7 +69,7 @@ pub enum Object {
 
 impl Object {
     /// Mark the current object reference and put it in `grey_objects` if its has not been marked.
-    pub fn mark(&self, grey_objects: &mut Vec<Self>) {
+    pub fn mark(&mut self, grey_objects: &mut Vec<Self>) {
         let marked = match self {
             Self::String(s) => s.mark(),
             Self::Upvalue(v) => v.mark(),
@@ -87,7 +86,7 @@ impl Object {
     }
 
     /// Unmark the object.
-    pub fn unmark(&self) {
+    pub fn unmark(&mut self) {
         match self {
             Self::String(s) => s.unmark(),
             Self::Upvalue(v) => v.unmark(),
@@ -143,7 +142,7 @@ impl Object {
     }
 
     /// Set the next object reference in the linked list.
-    pub fn set_next(&self, next: Option<Self>) {
+    pub fn set_next(&mut self, next: Option<Self>) {
         match self {
             Self::String(s) => s.set_next(next),
             Self::Upvalue(v) => v.set_next(next),
@@ -250,11 +249,11 @@ pub struct ObjClosure {
 
 impl ObjClosure {
     /// Mark all object references that can be directly access by the current object.
-    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+    pub fn mark_references(&mut self, grey_objects: &mut Vec<Object>) {
         if self.fun.mark() {
             grey_objects.push(Object::Fun(self.fun));
         }
-        for upvalue in &self.upvalues {
+        for upvalue in &mut self.upvalues {
             if upvalue.mark() {
                 grey_objects.push(Object::Upvalue(*upvalue));
             }
@@ -287,7 +286,7 @@ pub enum ObjUpvalue {
 
 impl ObjUpvalue {
     /// Mark all object references that can be directly access by the current object.
-    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+    pub fn mark_references(&mut self, grey_objects: &mut Vec<Object>) {
         if let Self::Closed(Value::Object(obj)) = self {
             obj.mark(grey_objects);
         }
@@ -331,13 +330,13 @@ impl ObjFun {
     }
 
     /// Mark all object references that can be directly access by the current object.
-    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
-        if let Some(name) = self.name {
+    pub fn mark_references(&mut self, grey_objects: &mut Vec<Object>) {
+        if let Some(name) = &mut self.name {
             if name.mark() {
-                grey_objects.push(Object::String(name));
+                grey_objects.push(Object::String(*name));
             }
         }
-        for constant in &self.chunk.constants {
+        for constant in &mut self.chunk.constants {
             if let Value::Object(obj) = constant {
                 obj.mark(grey_objects);
             }
@@ -404,11 +403,11 @@ impl ObjClass {
     }
 
     /// Mark all object references that can be directly access by the current object.
-    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+    pub fn mark_references(&mut self, grey_objects: &mut Vec<Object>) {
         if self.name.mark() {
             grey_objects.push(Object::String(self.name));
         }
-        for (k, v) in &self.methods {
+        for (k, v) in &mut self.methods {
             if k.mark() {
                 grey_objects.push(Object::String(*k));
             }
@@ -448,11 +447,11 @@ impl ObjInstance {
     }
 
     /// Mark all object references that can be directly access by the current object.
-    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
+    pub fn mark_references(&mut self, grey_objects: &mut Vec<Object>) {
         if self.class.mark() {
             grey_objects.push(Object::Class(self.class));
         }
-        for (k, v) in &self.fields {
+        for (k, v) in &mut self.fields {
             if k.mark() {
                 grey_objects.push(Object::String(*k));
             }
@@ -484,8 +483,8 @@ pub struct ObjBoundMethod {
 
 impl ObjBoundMethod {
     /// Mark all object references that can be directly access by the current object.
-    pub fn mark_references(&self, grey_objects: &mut Vec<Object>) {
-        if let Value::Object(o) = self.receiver {
+    pub fn mark_references(&mut self, grey_objects: &mut Vec<Object>) {
+        if let Value::Object(o) = &mut self.receiver {
             o.mark(grey_objects);
         }
         if self.method.mark() {
@@ -512,42 +511,42 @@ pub trait GcSized {
 
 #[derive(Debug)]
 pub struct GcData<T> {
-    next: Cell<Option<Object>>,
-    marked: Cell<bool>,
+    marked: bool,
+    next: Option<Object>,
     data: T,
 }
 
 impl<T> GcData<T> {
-    pub fn new(next: Option<Object>, data: T) -> Self {
+    pub const fn new(next: Option<Object>, data: T) -> Self {
         Self {
-            next: Cell::new(next),
-            marked: Cell::new(false),
+            marked: false,
+            next,
             data,
         }
     }
 
-    pub fn get_next(&self) -> Option<Object> {
-        self.next.get()
+    pub const fn get_next(&self) -> Option<Object> {
+        self.next
     }
 
-    pub fn set_next(&self, next: Option<Object>) {
-        self.next.set(next);
+    pub fn set_next(&mut self, next: Option<Object>) {
+        self.next = next;
     }
 
-    pub fn is_marked(&self) -> bool {
-        self.marked.get()
+    pub const fn is_marked(&self) -> bool {
+        self.marked
     }
 
-    pub fn mark(&self) -> bool {
-        if self.marked.get() {
+    pub fn mark(&mut self) -> bool {
+        if self.marked {
             return false;
         }
-        self.marked.set(true);
+        self.marked = true;
         true
     }
 
-    pub fn unmark(&self) {
-        self.marked.set(false);
+    pub fn unmark(&mut self) {
+        self.marked = false;
     }
 }
 

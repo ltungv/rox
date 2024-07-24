@@ -211,6 +211,21 @@ impl<'table, V> IntoIterator for &'table Table<V> {
     }
 }
 
+impl<'table, V> IntoIterator for &'table mut Table<V> {
+    type Item = (&'table mut RefString, &'table mut V);
+
+    type IntoIter = IterMut<'table, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Self::IntoIter {
+            ptr: self.ptr,
+            ptr_: PhantomData,
+            offset: 0,
+            capacity: self.capacity,
+        }
+    }
+}
+
 impl<V> Default for Table<V> {
     fn default() -> Self {
         Self {
@@ -262,6 +277,32 @@ impl<'table, V> Iterator for Iter<'table, V> {
             self.offset += 1;
             if let Entry::Occupied(x) = entry {
                 return Some((&x.key, &x.val));
+            }
+        }
+        None
+    }
+}
+
+#[derive(Debug)]
+pub struct IterMut<'table, V> {
+    ptr: NonNull<Entry<V>>,
+    ptr_: PhantomData<&'table mut Entry<V>>,
+    offset: usize,
+    capacity: usize,
+}
+
+impl<'table, V> Iterator for IterMut<'table, V> {
+    type Item = (&'table mut RefString, &'table mut V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.offset < self.capacity {
+            // SAFETY: The caller of this function must ensure that `ptr` is a valid pointer to
+            // the array of `Entry<V>` with the given `capacity`. Additionally, `self.offset`
+            // is always less than `self.capacity`.
+            let entry = unsafe { &mut *self.ptr.as_ptr().add(self.offset) };
+            self.offset += 1;
+            if let Entry::Occupied(x) = entry {
+                return Some((&mut x.key, &mut x.val));
             }
         }
         None

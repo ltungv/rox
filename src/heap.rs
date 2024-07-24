@@ -98,7 +98,7 @@ impl Heap {
             self.strings.del(s);
         }
 
-        while let Some(curr_ref) = curr_obj {
+        while let Some(mut curr_ref) = curr_obj {
             let next = curr_ref.get_next();
             if curr_ref.is_marked() {
                 curr_ref.unmark();
@@ -106,7 +106,7 @@ impl Heap {
                 curr_obj = next;
             } else {
                 curr_obj = next;
-                if let Some(prev_ref) = prev_obj {
+                if let Some(mut prev_ref) = prev_obj {
                     prev_ref.set_next(next);
                 } else {
                     self.head = curr_obj;

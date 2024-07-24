@@ -135,6 +135,21 @@ impl<'vec, T, const N: usize> IntoIterator for &'vec StaticVec<T, N> {
     }
 }
 
+impl<'vec, T, const N: usize> IntoIterator for &'vec mut StaticVec<T, N> {
+    type Item = &'vec mut T;
+
+    type IntoIter = IterMut<'vec, T, N>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let top = self.len;
+        Self::IntoIter {
+            vec: self,
+            bot: 0,
+            top,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Iter<'vec, T, const N: usize> {
     vec: &'vec StaticVec<T, N>,
@@ -172,6 +187,48 @@ impl<'vec, T, const N: usize> DoubleEndedIterator for Iter<'vec, T, N> {
 }
 
 impl<'vec, T, const N: usize> ExactSizeIterator for Iter<'vec, T, N> {
+    fn len(&self) -> usize {
+        self.top - self.bot
+    }
+}
+
+#[derive(Debug)]
+pub struct IterMut<'vec, T, const N: usize> {
+    vec: &'vec mut StaticVec<T, N>,
+    bot: usize,
+    top: usize,
+}
+
+impl<'vec, T, const N: usize> Iterator for IterMut<'vec, T, N> {
+    type Item = &'vec mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.bot >= self.top {
+            None
+        } else {
+            // SAFETY: We already checked if `self.bot >= self.top` and can't
+            // be out of bound at this point.
+            let it = unsafe { &mut *std::ptr::from_mut(self.vec.get_unchecked_mut(self.bot)) };
+            self.bot += 1;
+            Some(it)
+        }
+    }
+}
+impl<'vec, T, const N: usize> DoubleEndedIterator for IterMut<'vec, T, N> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.bot >= self.top {
+            None
+        } else {
+            self.top -= 1;
+            // SAFETY: We already checked if `self.bot >= self.top` and can't
+            // be out of bound at this point.
+            let it = unsafe { &mut *std::ptr::from_mut(self.vec.get_unchecked_mut(self.top)) };
+            Some(it)
+        }
+    }
+}
+
+impl<'vec, T, const N: usize> ExactSizeIterator for IterMut<'vec, T, N> {
     fn len(&self) -> usize {
         self.top - self.bot
     }
