@@ -563,20 +563,6 @@ impl<T> AsMut<T> for GcData<T> {
     }
 }
 
-// impl<T> ops::Deref for GcData<T> {
-//     type Target = T;
-//
-//     fn deref(&self) -> &Self::Target {
-//         &self.data
-//     }
-// }
-//
-// impl<T> ops::DerefMut for GcData<T> {
-//     fn deref_mut(&mut self) -> &mut Self::Target {
-//         &mut self.data
-//     }
-// }
-
 impl<T: GcSized> GcSized for GcData<T> {
     fn size(&self) -> usize {
         mem::size_of_val(&self.next) + mem::size_of_val(&self.marked) + self.data.size()
