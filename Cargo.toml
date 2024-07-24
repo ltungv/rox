@@ -11,7 +11,7 @@ dbg-execution = []
 dbg-heap = []
 
 [dependencies]
-clap = { version = "4.5.8", features = ["derive"] }
+clap = { version = "4.5.10", features = ["derive"] }
 regex = "1.10.5"
 
 [dev-dependencies]
