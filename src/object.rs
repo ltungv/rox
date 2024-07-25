@@ -241,9 +241,9 @@ impl fmt::Display for ObjString {
 /// The content of a heap-allocated closure object.
 #[derive(Debug)]
 pub struct ObjClosure {
-    // The function definition of this closure.
+    /// The function definition of this closure.
     pub fun: RefFun,
-    // The variables captured by this closure.
+    /// The variables captured by this closure.
     pub upvalues: Vec<RefUpvalue>,
 }
 
