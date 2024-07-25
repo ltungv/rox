@@ -77,13 +77,13 @@ impl Heap {
         s
     }
 
-    /// Release all objects whose address is not included in the hash set. This method also remove
-    /// the intern strings when objects no long reference them.
+    /// Release all objects whose address is not included in the hash set. This method also removes
+    /// the intern strings when objects no longer reference them.
     ///
     /// ## Safety
     ///
     /// We must ensure that all reachable pointers have been marked. Otherwise, we'll deallocate
-    /// objects that are in-used and leave dangling pointers.
+    /// objects that are in use and leave dangling pointers.
     pub unsafe fn sweep(&mut self) {
         let mut prev_obj: Option<Object> = None;
         let mut curr_obj = self.head;
@@ -142,8 +142,8 @@ impl Heap {
     ///
     /// ## Safety
     ///
-    /// + We must ensure that no other piece of our code will ever use this reference, otherwise we'll
-    /// invalidate a reference that is in used.
+    /// + We must ensure that no other piece of our code will ever use this reference. Otherwise, we'll
+    /// invalidate a reference that is in use.
     /// + Before calling this method, we must ensure that the object is removed from the linked list of
     /// heap-allocated objects.
     unsafe fn dealloc(&mut self, object: Object) {

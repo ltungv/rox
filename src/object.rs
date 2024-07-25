@@ -273,7 +273,7 @@ impl fmt::Display for ObjClosure {
     }
 }
 
-/// The content of an heap-allocated upvalue object.
+/// The content of a heap-allocated upvalue object.
 #[derive(Debug)]
 pub enum ObjUpvalue {
     /// An open upvalue references a stack slot and represents a variable that has not been
@@ -305,7 +305,7 @@ impl fmt::Display for ObjUpvalue {
     }
 }
 
-/// The content of an heap-allocated function object.
+/// The content of a heap-allocated function object.
 #[derive(Debug)]
 pub struct ObjFun {
     /// The name of the function
@@ -359,7 +359,7 @@ impl fmt::Display for ObjFun {
     }
 }
 
-/// The content of an heap-allocated native function object.
+/// The content of a heap-allocated native function object.
 pub struct ObjNativeFun {
     /// Number of parameters
     pub arity: u8,
@@ -385,7 +385,7 @@ impl fmt::Debug for ObjNativeFun {
     }
 }
 
-/// The content of an heap-allocated class definition object.
+/// The content of a heap-allocated class definition object.
 #[derive(Debug)]
 pub struct ObjClass {
     /// The name of the class.
@@ -430,7 +430,7 @@ impl fmt::Display for ObjClass {
     }
 }
 
-/// The content of an heap-allocated class instance object.
+/// The content of a heap-allocated class instance object.
 #[derive(Debug)]
 pub struct ObjInstance {
     pub class: RefClass,
@@ -474,7 +474,7 @@ impl fmt::Display for ObjInstance {
     }
 }
 
-/// The content of an heap-allocated bound method object.
+/// The content of a heap-allocated bound method object.
 #[derive(Debug)]
 pub struct ObjBoundMethod {
     pub receiver: Value,
