@@ -128,7 +128,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         #[cfg(feature = "dbg-execution")]
         match &compiler.fun.name {
             None => disassemble(&compiler.fun.chunk, "code"),
-            Some(s) => disassemble(&compiler.fun.chunk, &s.data),
+            Some(s) => disassemble(&compiler.fun.chunk, &s.as_ref().data),
         };
 
         compiler

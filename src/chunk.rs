@@ -143,7 +143,7 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
             offset += 1;
             println!("{:-16} {constant_id:4} {constant}", "OP_CLOSURE");
             let fun = constant.as_fun().expect("expect function object.");
-            let upvalue_count = fun.upvalue_count;
+            let upvalue_count = fun.as_ref().upvalue_count;
             for _ in 0..upvalue_count {
                 let is_local = chunk.instructions[offset + 1] == 1;
                 let index = chunk.instructions[offset + 2];
