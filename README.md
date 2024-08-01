@@ -38,7 +38,36 @@ A feature-complete bytecode virtual machine written in Rust for the Lox programm
   1. Evaluate the switch value.
   2. Walk the cases:
     + Evaluate the expression of each case.
-    + If the evaluated value equals to the switch value, execute the statements under the case, then exit the `switch` statement.
+    + If the evaluated value equals the switch value, execute the statements under the case, then exit the `switch` statement.
     + If no case matches and there is a default case, execute its statements.
 + [ ] `continue`/`break` statements in a loop.
 
+## Tests and benchmarks
+
+The runners for tests and benchmarks were ported from Dart to avoid installing Dart's SDK. Because Dart 2 has been deprecated, it's a hassle to get everything working. First, ensure the `craftinginterpreters` submodule is pulled to your local machine to get all the official tests and benchmarks.
+
+```sh
+git submodule update --init --recursive
+```
+
+To test the interpreter, use the command `cargo run --bin test` and give it the path to the test folder and the interpreter binary. You can also build the binary if needed.
+
+```sh
+Usage: test --directory <DIRECTORY> --executable <EXECUTABLE>
+
+Options:
+  -d, --directory <DIRECTORY>
+  -e, --executable <EXECUTABLE>
+  -h, --help                     Print help
+```
+
+To benchmark and compare different interpreters, use the command `cargo run --bin compare` and give it the path to the benchmark folder and all the interpreter binaries. You can also build the binary if needed.
+
+```sh
+Usage: compare [OPTIONS] --directory <DIRECTORY>
+
+Options:
+  -d, --directory <DIRECTORY>
+  -e, --executables <EXECUTABLES>
+  -h, --help                       Print help
+```
