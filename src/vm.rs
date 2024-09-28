@@ -3,9 +3,7 @@
 use std::{
     cell::Cell,
     error, fmt,
-    marker::PhantomData,
     ops::{Add, Div, Mul, Neg, Not, Sub},
-    ptr::NonNull,
 };
 
 use crate::{
@@ -109,8 +107,6 @@ impl From<opcode::Error> for RuntimeError {
 pub struct VirtualMachine {
     stack: List<Value, VM_STACK_SIZE>,
     frames: List<CallFrame, MAX_FRAMES>,
-    current_frame: NonNull<CallFrame>,
-    current_frame_: PhantomData<CallFrame>,
     open_upvalues: Vec<RefUpvalue>,
     globals: Table<Value>,
     grey_objects: Vec<Object>,
@@ -127,8 +123,6 @@ impl VirtualMachine {
         let mut vm = Self {
             stack: List::default(),
             frames: List::default(),
-            current_frame: NonNull::dangling(),
-            current_frame_: PhantomData,
             open_upvalues: Vec::default(),
             globals: Table::default(),
             grey_objects: Vec::default(),
@@ -879,12 +873,12 @@ impl VirtualMachine {
         unsafe { self.frame_mut().read_constant() }
     }
 
-    const fn frame(&self) -> &CallFrame {
-        unsafe { self.current_frame.as_ref() }
+    fn frame(&self) -> &CallFrame {
+        self.frames.last(0)
     }
 
     fn frame_mut(&mut self) -> &mut CallFrame {
-        unsafe { self.current_frame.as_mut() }
+        self.frames.last_mut(0)
     }
 
     fn frames_push(&mut self, frame: CallFrame) -> Result<usize, RuntimeError> {
@@ -894,16 +888,11 @@ impl VirtualMachine {
         }
         // SAFETY: We already checked if the stack frame is full.
         unsafe { self.frames.push_unchecked(frame) };
-        self.current_frame = NonNull::from(self.frames.last_mut(0));
         Ok(frame_count)
     }
 
     fn frames_pop(&mut self) -> CallFrame {
-        let ret = self.frames.pop();
-        if self.frames.len() > 0 {
-            self.current_frame = NonNull::from(self.frames.last_mut(0));
-        }
-        ret
+        self.frames.pop()
     }
 
     fn stack_push(&mut self, value: Value) -> Result<(), RuntimeError> {
