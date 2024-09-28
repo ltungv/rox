@@ -98,23 +98,23 @@ impl Heap {
         let mut dangling_strings = Vec::with_capacity(self.strings.len());
         for (k, ()) in &self.strings {
             if !k.is_marked() {
-                dangling_strings.push(*k);
+                dangling_strings.push(k);
             }
         }
         for s in dangling_strings {
             self.strings.del(s);
         }
 
-        while let Some(curr_ref) = &mut curr_obj {
+        while let Some(curr_ref) = curr_obj {
             let next = curr_ref.get_next();
             if curr_ref.is_marked() {
                 curr_ref.unmark();
                 prev_obj = curr_obj;
                 curr_obj = next;
             } else {
-                self.dealloc(*curr_ref);
+                self.dealloc(curr_ref);
                 curr_obj = next;
-                if let Some(prev_ref) = &mut prev_obj {
+                if let Some(prev_ref) = prev_obj {
                     prev_ref.set_next(next);
                 } else {
                     self.head = curr_obj;

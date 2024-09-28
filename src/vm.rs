@@ -1,6 +1,7 @@
 //! Implementation of the bytecode virtual machine.
 
 use std::{
+    cell::Cell,
     error, fmt,
     ops::{Add, Div, Mul, Neg, Not, Sub},
     ptr::NonNull,
@@ -287,8 +288,8 @@ impl VirtualMachine {
             .map_err(|_| RuntimeError::InvalidMethodInvocation)?;
 
         if let Some(field) = instance.as_ref().fields.get(method) {
-            *self.stack_top_mut(argc as usize) = *field;
-            self.call_value(*field, argc)?;
+            *self.stack_top_mut(argc as usize) = field;
+            self.call_value(field, argc)?;
         } else {
             self.invoke_from_class(instance.as_ref().class, method, argc)?;
         }
@@ -308,7 +309,7 @@ impl VirtualMachine {
             .methods
             .get(name)
             .ok_or_else(|| RuntimeError::UndefinedProperty(name.as_ref().to_string()))?;
-        self.call_closure(*method, argc)?;
+        self.call_closure(method, argc)?;
         Ok(())
     }
 
@@ -317,8 +318,8 @@ impl VirtualMachine {
     fn method(&mut self) -> Result<(), RuntimeError> {
         let name = self.read_constant().as_string()?;
         let closure = self.stack_pop().as_closure()?;
-        let mut class = self.stack_top(0).as_class()?;
-        class.as_mut().methods.set(name, closure);
+        let class = self.stack_top(0).as_class()?;
+        class.as_ref().methods.set(name, closure);
         Ok(())
     }
 
@@ -327,7 +328,7 @@ impl VirtualMachine {
             Some(method) => {
                 let (bound, _) = self.alloc_bound_method(ObjBoundMethod {
                     receiver: *self.stack_top(0),
-                    method: *method,
+                    method,
                 });
                 self.stack_pop();
                 self.stack_push(Value::Object(bound))?;
@@ -346,7 +347,7 @@ impl VirtualMachine {
 
         if let Some(value) = instance.as_ref().fields.get(name) {
             self.stack_pop();
-            self.stack_push(*value)?;
+            self.stack_push(value)?;
             Ok(())
         } else if self.bind_method(instance.as_ref().class, name)? {
             Ok(())
@@ -358,12 +359,12 @@ impl VirtualMachine {
     fn set_property(&mut self) -> Result<(), RuntimeError> {
         let name = self.read_constant().as_string()?;
         let value = self.stack_pop();
-        let mut instance = self
+        let instance = self
             .stack_top(0)
             .as_instance()
             .map_err(|_| RuntimeError::ObjectHasNoField)?;
 
-        instance.as_mut().fields.set(name, value);
+        instance.as_ref().fields.set(name, value);
         self.stack_pop();
         self.stack_push(value)?;
         Ok(())
@@ -390,9 +391,9 @@ impl VirtualMachine {
             .stack_top(1)
             .as_class()
             .map_err(|_| RuntimeError::InvalidSuperclass)?;
-        let mut subclass = self.stack_top(0).as_class()?;
+        let subclass = self.stack_top(0).as_class()?;
         for (method_name, method) in &superclass.as_ref().methods {
-            subclass.as_mut().methods.set(*method_name, *method);
+            subclass.as_ref().methods.set(method_name, method);
         }
         self.stack_pop();
         Ok(())
@@ -402,17 +403,17 @@ impl VirtualMachine {
     fn get_upvalue(&mut self) -> Result<(), RuntimeError> {
         let upvalue_slot = self.read_byte();
         let upvalue = self.frame().closure.as_ref().upvalues[upvalue_slot as usize];
-        match upvalue.as_ref() {
+        match upvalue.as_ref().get() {
             // Value is on the stack.
             ObjUpvalue::Open(stack_slot) => {
                 // SAFETY: The compiler should produce safe byte codes such that we never
                 // access uninitialized data.
-                let value = unsafe { self.stack.get_unchecked(*stack_slot) };
+                let value = unsafe { self.stack.get_unchecked(stack_slot) };
                 self.stack_push(*value)?;
             }
             // Value is on the heap.
             ObjUpvalue::Closed(value) => {
-                self.stack_push(*value)?;
+                self.stack_push(value)?;
             }
         }
         Ok(())
@@ -422,22 +423,18 @@ impl VirtualMachine {
     fn set_upvalue(&mut self) {
         let upvalue_slot = self.read_byte();
         let value = *self.stack_top(0);
-        let stack_slot = {
-            let mut upvalue = self.frame().closure.as_ref().upvalues[upvalue_slot as usize];
-            match upvalue.as_mut() {
-                // Value is on the stack.
-                ObjUpvalue::Open(stack_slot) => Some(*stack_slot),
-                // Value is on the heap.
-                ObjUpvalue::Closed(ref mut v) => {
-                    *v = value;
-                    None
-                }
+        let upvalue = self.frame().closure.as_ref().upvalues[upvalue_slot as usize];
+        match upvalue.as_ref().get() {
+            // Value is on the stack.
+            ObjUpvalue::Open(stack_slot) => {
+                // SAFETY: The compiler should produce safe code that access a safe part of the stack.
+                let v = unsafe { self.stack.get_unchecked_mut(stack_slot) };
+                *v = value;
             }
-        };
-        if let Some(slot) = stack_slot {
-            // SAFETY: The compiler should produce safe code that access a safe part of the stack.
-            let v = unsafe { self.stack.get_unchecked_mut(slot) };
-            *v = value;
+            // Value is on the heap.
+            ObjUpvalue::Closed(_) => {
+                upvalue.as_ref().set(ObjUpvalue::Closed(value));
+            }
         }
     }
 
@@ -471,8 +468,8 @@ impl VirtualMachine {
         // to close over a variable not a value. Thus, closures can shared data through the same
         // captured variable.
         for upvalue in &self.open_upvalues {
-            if let ObjUpvalue::Open(loc) = upvalue.as_ref() {
-                if *loc == location {
+            if let ObjUpvalue::Open(loc) = upvalue.as_ref().get() {
+                if loc == location {
                     return *upvalue;
                 }
             }
@@ -486,22 +483,22 @@ impl VirtualMachine {
     // Close all upvalues whose referenced stack slot went out of scope. Here, `last` is the lowest
     // stack slot that went out of scope.
     fn close_upvalues(&mut self, last: usize) {
-        for upvalue in &mut self.open_upvalues {
+        for upvalue in &self.open_upvalues {
             // Check if we reference a slot that went out of scope.
-            let stack_slot = match upvalue.as_ref() {
-                ObjUpvalue::Open(slot) if *slot >= last => Some(*slot),
+            let stack_slot = match upvalue.as_ref().get() {
+                ObjUpvalue::Open(slot) if slot >= last => Some(slot),
                 _ => None,
             };
             // Hoist the variable up into the upvalue so it can live after the stack frame is pop.
             if let Some(slot) = stack_slot {
                 // SAFETY: The compiler should produce safe code that access a safe part of the stack.
                 let v = unsafe { self.stack.get_unchecked(slot) };
-                *upvalue.as_mut() = ObjUpvalue::Closed(*v);
+                upvalue.as_ref().set(ObjUpvalue::Closed(*v));
             }
         }
         // remove closed upvalues from list of open upvalues
         self.open_upvalues
-            .retain(|v| matches!(v.as_ref(), ObjUpvalue::Open(_)));
+            .retain(|v| matches!(v.as_ref().get(), ObjUpvalue::Open(_)));
     }
 
     /// Return from a function call
@@ -586,7 +583,7 @@ impl VirtualMachine {
         *self.stack_top_mut(argc.into()) = Value::Object(instance);
         // Call the 'init' method if there's one
         if let Some(init) = callee.as_ref().methods.get(self.str_init) {
-            self.call_closure(*init, argc)?;
+            self.call_closure(init, argc)?;
         } else if argc != 0 {
             return Err(RuntimeError::InvalidArgumentsCount { arity: 0, argc });
         }
@@ -655,7 +652,7 @@ impl VirtualMachine {
             .globals
             .get(name)
             .ok_or_else(|| RuntimeError::UndefinedVariable(name.as_ref().to_string()))?;
-        self.stack_push(*value)?;
+        self.stack_push(value)?;
         Ok(())
     }
 
@@ -819,7 +816,7 @@ impl VirtualMachine {
 
     fn mark_sweep(&mut self) {
         self.mark_roots();
-        while let Some(mut grey_object) = self.grey_objects.pop() {
+        while let Some(grey_object) = self.grey_objects.pop() {
             grey_object.mark_references(&mut self.grey_objects);
         }
         // SAFETY: We make sure that the sweep step has correctly mark all reachable objects, so
@@ -832,24 +829,24 @@ impl VirtualMachine {
         if self.str_init.mark() {
             self.grey_objects.push(Object::String(self.str_init));
         }
-        for value in &mut self.stack {
+        for value in &self.stack {
             if let Value::Object(o) = value {
                 o.mark(&mut self.grey_objects);
             }
         }
-        for frame in &mut self.frames {
+        for frame in &self.frames {
             if frame.closure.mark() {
                 self.grey_objects.push(Object::Closure(frame.closure));
             }
         }
-        for upvalue in &mut self.open_upvalues {
+        for upvalue in &self.open_upvalues {
             if upvalue.mark() {
                 self.grey_objects.push(Object::Upvalue(*upvalue));
             }
         }
-        for (k, v) in &mut self.globals {
+        for (k, v) in &self.globals {
             if k.mark() {
-                self.grey_objects.push(Object::String(*k));
+                self.grey_objects.push(Object::String(k));
             }
             if let Value::Object(o) = v {
                 o.mark(&mut self.grey_objects);
@@ -994,7 +991,7 @@ impl VirtualMachine {
 
     fn alloc_upvalue(&mut self, upvalue: ObjUpvalue) -> (Object, RefUpvalue) {
         self.gc();
-        self.heap.alloc(upvalue, Object::Upvalue)
+        self.heap.alloc(Cell::new(upvalue), Object::Upvalue)
     }
 
     fn alloc_closure(&mut self, closure: ObjClosure) -> (Object, RefClosure) {
