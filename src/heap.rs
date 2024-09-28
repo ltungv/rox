@@ -137,10 +137,9 @@ impl Heap {
         {
             self.gc_next_threshold
         }
-
         #[cfg(feature = "dbg-stress-gc")]
         {
-            let _ = self;
+            _ = self;
             0
         }
     }
@@ -150,9 +149,9 @@ impl Heap {
     /// ## Safety
     ///
     /// + The caller must ensure that no other piece of code will ever use this
-    /// reference. Otherwise, we'll risk dereferencing a dangling pointer.
+    ///   reference. Otherwise, we'll risk dereferencing a dangling pointer.
     /// + Before calling this method, the caller must ensure that the object was
-    /// removed from the linked list of heap-allocated objects.
+    ///   removed from the linked list of heap-allocated objects.
     unsafe fn dealloc(&mut self, object: Object) {
         let size = object.size();
         self.alloc_bytes -= size;

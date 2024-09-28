@@ -11,8 +11,8 @@ dbg-execution = []
 dbg-heap = []
 
 [dependencies]
-clap = { version = "4.5.10", features = ["derive"] }
-regex = "1.10.5"
+clap = { version = "4.5.18", features = ["derive"] }
+regex = "1.10.6"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -191,23 +191,23 @@ impl<'src> Scanner<'src> {
 
     /// Return the result of applying the given function to the next character in the iterator
     /// without consuming it. Return false if there's no more item.
-    fn peek_check<F: Fn(u8) -> bool>(&mut self, check: F) -> bool {
+    fn peek_check<F: Fn(u8) -> bool>(&self, check: F) -> bool {
         self.peek().is_some_and(check)
     }
 
     /// Return the result of applying the given function to the character after the next one in
     /// the iterator without consuming them. Return false if there's no more item.
-    fn peek_next_check<F: Fn(u8) -> bool>(&mut self, check: F) -> bool {
+    fn peek_next_check<F: Fn(u8) -> bool>(&self, check: F) -> bool {
         self.peek_next().is_some_and(check)
     }
 
     /// Return the next character in the iterator without consuming it.
-    fn peek(&mut self) -> Option<u8> {
+    fn peek(&self) -> Option<u8> {
         self.src.as_bytes().get(self.lexeme_tail).copied()
     }
 
     /// Return the character after the next one in the iterator without consuming them.
-    fn peek_next(&mut self) -> Option<u8> {
+    fn peek_next(&self) -> Option<u8> {
         self.src.as_bytes().get(self.lexeme_tail + 1).copied()
     }
 
@@ -235,7 +235,7 @@ impl<'src> Scanner<'src> {
     }
 
     /// Create a token of the given kind based on the current scanner's context.
-    fn make_token(&mut self, kind: Kind) -> Token<'src> {
+    fn make_token(&self, kind: Kind) -> Token<'src> {
         Token {
             kind,
             lexeme: &self.src[self.lexeme_head..self.lexeme_tail],
