@@ -3,6 +3,7 @@
 use std::{
     cell::Cell,
     error, fmt,
+    marker::PhantomData,
     ops::{Add, Div, Mul, Neg, Not, Sub},
     ptr::NonNull,
 };
@@ -109,6 +110,7 @@ pub struct VirtualMachine {
     stack: StaticVec<Value, VM_STACK_SIZE>,
     frames: StaticVec<CallFrame, MAX_FRAMES>,
     current_frame: NonNull<CallFrame>,
+    current_frame_: PhantomData<CallFrame>,
     open_upvalues: Vec<RefUpvalue>,
     globals: Table<Value>,
     grey_objects: Vec<Object>,
@@ -126,6 +128,7 @@ impl VirtualMachine {
             stack: StaticVec::default(),
             frames: StaticVec::default(),
             current_frame: NonNull::dangling(),
+            current_frame_: PhantomData,
             open_upvalues: Vec::default(),
             globals: Table::default(),
             grey_objects: Vec::default(),
