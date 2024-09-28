@@ -339,7 +339,7 @@ impl ObjFun {
                 grey_objects.push(Object::String(*name));
             }
         }
-        for constant in &self.chunk.constants {
+        for constant in &*self.chunk.constants {
             if let Value::Object(obj) = constant {
                 obj.mark(grey_objects);
             }

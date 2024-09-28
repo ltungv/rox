@@ -11,13 +11,13 @@ use std::{
 use crate::{
     compile::{Parser, MAX_FRAMES},
     heap::Heap,
+    list::List,
     object::{
         self, ObjBoundMethod, ObjClass, ObjClosure, ObjFun, ObjInstance, ObjNativeFun, ObjUpvalue,
         Object, RefBoundMethod, RefClass, RefClosure, RefFun, RefInstance, RefNativeFun, RefString,
         RefUpvalue,
     },
     opcode::{self, Opcode},
-    static_vec::StaticVec,
     table::Table,
     value::{self, Value},
     InterpretError,
@@ -107,8 +107,8 @@ impl From<opcode::Error> for RuntimeError {
 /// A bytecode virtual machine for the Lox programming language.
 #[derive(Debug)]
 pub struct VirtualMachine {
-    stack: StaticVec<Value, VM_STACK_SIZE>,
-    frames: StaticVec<CallFrame, MAX_FRAMES>,
+    stack: List<Value, VM_STACK_SIZE>,
+    frames: List<CallFrame, MAX_FRAMES>,
     current_frame: NonNull<CallFrame>,
     current_frame_: PhantomData<CallFrame>,
     open_upvalues: Vec<RefUpvalue>,
@@ -125,8 +125,8 @@ impl VirtualMachine {
         let mut heap = Heap::default();
         let str_init = heap.intern(String::from("init"));
         let mut vm = Self {
-            stack: StaticVec::default(),
-            frames: StaticVec::default(),
+            stack: List::default(),
+            frames: List::default(),
             current_frame: NonNull::dangling(),
             current_frame_: PhantomData,
             open_upvalues: Vec::default(),
@@ -171,7 +171,7 @@ impl VirtualMachine {
 
     fn run(&mut self, fun: ObjFun) -> Result<(), RuntimeError> {
         // Push the constant onto the stack so GC won't remove it while allocating the function.
-        for constant in &fun.chunk.constants {
+        for constant in &*fun.chunk.constants {
             self.stack_push(*constant)?;
         }
         let constant_count = fun.chunk.constants.len();
@@ -574,7 +574,7 @@ impl VirtualMachine {
         }
         let argc = argc as usize;
         let call = callee.as_ref().call;
-        let res = call(self.stack.last_chunk(argc));
+        let res = call(self.stack.last_slice(argc));
         self.stack_remove_top(argc + 1);
         self.stack_push(res)?;
         Ok(())
@@ -832,12 +832,12 @@ impl VirtualMachine {
         if self.str_init.mark() {
             self.grey_objects.push(Object::String(self.str_init));
         }
-        for value in &self.stack {
+        for value in &*self.stack {
             if let Value::Object(o) = value {
                 o.mark(&mut self.grey_objects);
             }
         }
-        for frame in &self.frames {
+        for frame in &*self.frames {
             if frame.closure.mark() {
                 self.grey_objects.push(Object::Closure(frame.closure));
             }
@@ -928,11 +928,11 @@ impl VirtualMachine {
     }
 
     fn stack_remove_top(&mut self, n: usize) {
-        self.stack.remove(n);
+        self.stack.truncate(self.stack.len() - n);
     }
 
     fn trace_calls(&self) {
-        for frame in self.frames.into_iter().rev() {
+        for frame in self.frames.iter().rev() {
             let offset = unsafe {
                 usize::try_from(
                     frame.ip.offset_from(
@@ -1030,7 +1030,7 @@ impl VirtualMachine {
     #[cfg(feature = "dbg-execution")]
     fn trace_stack(&self) {
         print!("          ");
-        for value in &self.stack {
+        for value in &*self.stack {
             print!("[ {value} ]");
         }
         println!();

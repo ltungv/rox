@@ -1,4 +1,4 @@
-use crate::{opcode::Opcode, scan::Line, static_vec::StaticVec, value::Value};
+use crate::{list::List, opcode::Opcode, scan::Line, value::Value};
 
 #[cfg(feature = "dbg-execution")]
 use crate::vm::JumpDirection;
@@ -9,7 +9,7 @@ const MAX_CONSTANTS: usize = 1 << 8;
 #[derive(Debug, Default)]
 pub struct Chunk {
     pub instructions: Vec<u8>,
-    pub constants: StaticVec<Value, MAX_CONSTANTS>,
+    pub constants: List<Value, MAX_CONSTANTS>,
     lines: Vec<RunLength<Line>>,
 }
 

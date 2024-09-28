@@ -11,10 +11,10 @@
 mod chunk;
 mod compile;
 mod heap;
+mod list;
 mod object;
 mod opcode;
 mod scan;
-mod static_vec;
 mod table;
 mod value;
 mod vm;

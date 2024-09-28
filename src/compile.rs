@@ -2,10 +2,10 @@
 
 use crate::{
     heap::Heap,
+    list::List,
     object::{ObjFun, Object},
     opcode::Opcode,
     scan::{Kind, Line, Scanner, Token},
-    static_vec::StaticVec,
     value::Value,
 };
 
@@ -83,9 +83,9 @@ pub struct Parser<'src, 'vm> {
     /// The scanner for turning source bytes into tokens.
     scanner: Scanner<'src>,
     /// The compiler's state for tracking classes.
-    classes: StaticVec<ClassCompiler, MAX_FRAMES>,
+    classes: List<ClassCompiler, MAX_FRAMES>,
     /// The compiler's state for tracking scopes.
-    compilers: StaticVec<Compiler<'src>, MAX_FRAMES>,
+    compilers: List<Compiler<'src>, MAX_FRAMES>,
     /// The heap of the currently running virtual machine.
     heap: &'vm mut Heap,
 }
@@ -94,7 +94,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Create a new parser that reads the given source string.
     pub fn new(src: &'src str, heap: &'vm mut Heap) -> Self {
         let fun = ObjFun::new(None);
-        let mut compilers = StaticVec::default();
+        let mut compilers = List::default();
         // SAFETY: We just created `compilers` and are sure that it's not full.
         unsafe { compilers.push_unchecked(Compiler::new(fun, FunctionType::Script)) };
         Self {
@@ -103,7 +103,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             token_prev: Token::placeholder(),
             token_curr: Token::placeholder(),
             scanner: Scanner::new(src),
-            classes: StaticVec::default(),
+            classes: List::default(),
             compilers,
             heap,
         }
@@ -376,7 +376,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit(Opcode::Closure);
         self.emit_byte(constant_id);
 
-        for upvalue in &compiler.upvalues {
+        for upvalue in &*compiler.upvalues {
             if upvalue.is_local {
                 self.emit_byte(1);
             } else {
@@ -406,7 +406,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let compiler = self.compiler_mut(0);
         // Skip this step for global scope.
         if compiler.scope_depth > 0 {
-            for local in compiler.locals.into_iter().rev() {
+            for local in compiler.locals.iter().rev() {
                 if local.depth != -1 && local.depth < compiler.scope_depth {
                     // Stop if we've gone through all initialized variable in the current scope.
                     break;
@@ -1069,7 +1069,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
         // Walk up from low scope to high scope to find a local with the given name.
         let compiler = self.compiler(height);
-        for (id, local) in (0..=u8::MAX).zip(compiler.locals.into_iter()).rev() {
+        for (id, local) in (0..=u8::MAX).zip(compiler.locals.iter()).rev() {
             if local.name == name.lexeme {
                 if local.depth == -1 {
                     self.error_prev("Can't read local variable in its own initializer.");
@@ -1116,7 +1116,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// corresponding upvalue is returned instead of adding a new upvalue.
     fn add_upvalue(&mut self, height: usize, index: u8, is_local: bool) -> u8 {
         // Find an upvalue that references the same index.
-        for (upvalue_id, upvalue) in (0..=u8::MAX).zip(self.compiler(height).upvalues.into_iter()) {
+        for (upvalue_id, upvalue) in (0..=u8::MAX).zip(&*self.compiler(height).upvalues) {
             if upvalue.index == index && upvalue.is_local == is_local {
                 return upvalue_id;
             }
@@ -1433,9 +1433,9 @@ struct Compiler<'src> {
     /// The number of "blocks" surrounding the current piece of code that we're compiling.
     scope_depth: isize,
     /// A stack of local variables sorted by the order in which they are declared.
-    locals: StaticVec<Local<'src>, MAX_LOCALS>,
+    locals: List<Local<'src>, MAX_LOCALS>,
     /// A stack of local variables sorted by the order in which they are declared.
-    upvalues: StaticVec<Upvalue, MAX_UPVALUES>,
+    upvalues: List<Upvalue, MAX_UPVALUES>,
 }
 
 impl<'src> Compiler<'src> {
@@ -1446,7 +1446,7 @@ impl<'src> Compiler<'src> {
             FunctionType::Method | FunctionType::Initializer => "this",
             _ => "",
         };
-        let mut locals = StaticVec::default();
+        let mut locals = List::default();
         // SAFETY: We just created `locals` and are sure that it's not full.
         unsafe {
             locals.push_unchecked(Local {
@@ -1460,7 +1460,7 @@ impl<'src> Compiler<'src> {
             fun_type,
             scope_depth: 0,
             locals,
-            upvalues: StaticVec::default(),
+            upvalues: List::default(),
         }
     }
 }
