@@ -1,5 +1,4 @@
-//! Implementation of a dynamic array with fixed capacity. Operations that modify the list don't
-//! perform bounds checking and may result in undefined behaviors.
+//! Implementation of a dynamic array with fixed capacity.
 
 use std::{
     marker::PhantomData,
@@ -11,6 +10,18 @@ use std::{
 pub struct List<T, const N: usize> {
     buf: RawList<T, N>,
     len: usize,
+}
+
+impl<T, const N: usize> Drop for List<T, N> {
+    fn drop(&mut self) {
+        let s = std::ptr::slice_from_raw_parts_mut(self.ptr(), self.len);
+        // SAFETY:
+        // + `self.len <= N` is an invariant.
+        // + `self.ptr()` is valid and non-null.
+        // + `self.ptr()` points to an aligned array of size `N`.
+        // + The first `self.len` elements are guaranteed to be initialized.
+        unsafe { std::ptr::drop_in_place(s) };
+    }
 }
 
 impl<T, const N: usize> Default for List<T, N> {
@@ -25,29 +36,42 @@ impl<T, const N: usize> Default for List<T, N> {
 impl<T, const N: usize> Deref for List<T, N> {
     type Target = [T];
     fn deref(&self) -> &[T] {
+        // SAFETY:
+        // + `self.len <= N` is an invariant.
+        // + `self.ptr()` is valid and non-null.
+        // + `self.ptr()` points to an aligned array of size `N`.
+        // + The first `self.len` elements are guaranteed to be initialized.
         unsafe { std::slice::from_raw_parts(self.ptr(), self.len) }
     }
 }
 
 impl<T, const N: usize> DerefMut for List<T, N> {
     fn deref_mut(&mut self) -> &mut [T] {
+        // SAFETY:
+        // + `self.len <= N` is an invariant.
+        // + `self.ptr()` is valid and non-null.
+        // + `self.ptr()` points to an aligned array of size `N`.
+        // + The first `self.len` elements are guaranteed to be initialized.
         unsafe { std::slice::from_raw_parts_mut(self.ptr(), self.len) }
     }
 }
 
 impl<T, const N: usize> List<T, N> {
-    /// Get a reference to the value at the end of the list.
+    /// Gets a reference to the value at the end of the list.
     ///
     /// # Panics
     ///
     /// This function panics with an overflow on subtraction when trying to
     /// index passes more items than what the list currently has.
     pub fn last(&self, n: usize) -> &T {
-        // SAFETY: All items at index below `self.len` must be valid and initialized
+        // SAFETY:
+        // + `n` must be smaller than `self.len`, otherwise, a panic occurs before the access.
+        // + Only elements whose index is in `[0, self.len)` are accessed.
+        // + The first `self.len` elements are guaranteed to be initialized.
         unsafe { self.get_unchecked(self.len - n - 1) }
     }
 
-    /// Get a mutable reference to the value at the ned of the list.
+    /// Gets a mutable reference to the value at the end of the list.
     ///
     /// # Panics
     ///
@@ -55,27 +79,32 @@ impl<T, const N: usize> List<T, N> {
     /// index passes more items than what the list currently has.
     pub fn last_mut(&mut self, n: usize) -> &mut T {
         let len = self.len;
-        // SAFETY: All items at index below `self.len` must be valid and initialized
+        // SAFETY:
+        // + `n` must be smaller than `self.len`, otherwise, a panic occurs before the access.
+        // + Only elements whose index is in `[0, self.len)` are accessed.
+        // + The first `self.len` elements are guaranteed to be initialized.
         unsafe { self.get_unchecked_mut(len - n - 1) }
     }
 
-    /// Get a slice of `count` values at the end of the list.
+    /// Gets a slice of the last `count` values of the list.
     ///
     /// # Panics
     ///
-    /// This function panics with an overflow on subtraction when trying to
-    /// get more items than what the list currently has.
+    /// This function panics with an overflow on subtraction when `len` is larger than the number
+    /// of elements currently in the list.
     pub const fn last_slice(&self, len: usize) -> &[T] {
         let offset = self.len - len;
         // SAFETY:
-        // + The pointer we read from always points to a valid memory region because we allocated
-        // for an array of size `N`, and `self.len <= N` when all invariants are held.
-        // + Any pointer between `self.ptr().add(offset)` and `self.ptr().add(self.len)` is
-        // guaranteed to have been initialized.
+        // + `self.len <= N` is an invariant.
+        // + `self.ptr()` is valid and non-null.
+        // + `self.ptr()` points to an aligned array of size `N`.
+        // + `len <= self.len`, otherwise, a panic occurs before reaching here.
+        // + Only elements whose index is in `[0, self.len)` are accessed.
+        // + The first `self.len` elements are guaranteed to be initialized.
         unsafe { std::slice::from_raw_parts(self.ptr().add(offset), len) }
     }
 
-    /// Add a value to the end of the list.
+    /// Adds a value to the end of the list.
     ///
     /// # Safety
     ///
@@ -86,16 +115,18 @@ impl<T, const N: usize> List<T, N> {
             self.len < N,
             "Pushing to a full list is an undefined behavior"
         );
-        // SAFETY: The caller is responsible for ensuring that `self.len < N` upon calling this
-        // method. If that is the case, the pointer we write to always points to a valid memory
-        // region because we allocated for an array of size `N`.
+        // SAFETY:
+        // + `self.len < N`, guaranteed by the caller.
+        // + `self.ptr()` is valid and non-null.
+        // + `self.ptr()` points to an aligned array of size `N`.
+        // + Only the element at index `self.len` is accessed.
         unsafe {
             std::ptr::write(self.ptr().add(self.len), value);
         }
         self.len += 1;
     }
 
-    /// Remove the value at the end of the list and return it.
+    /// Removes the value at the end of the list and return it.
     ///
     /// # Panics
     ///
@@ -105,10 +136,11 @@ impl<T, const N: usize> List<T, N> {
         // reading from an offset larger than `N`.
         self.len -= 1;
         // SAFETY:
-        // + The pointer we read from always points to a valid memory region because we allocated
-        // for an array of size `N`, and `self.len <= N` when all invariants are held.
-        // + Any pointer between `self.ptr()` and `self.ptr().add(self.len)` is guaranteed to have
-        // been initialized.
+        // + `self.len < N`, guaranteed by the invariant that `self.len <= N`.
+        // + `self.ptr()` is valid and non-null.
+        // + `self.ptr()` points to an aligned array of size `N`.
+        // + Only the element at index `self.len` is accessed.
+        // + The first `self.len` elements are guaranteed to be initialized.
         unsafe { std::ptr::read(self.ptr().add(self.len)) }
     }
 
@@ -119,10 +151,12 @@ impl<T, const N: usize> List<T, N> {
             return;
         }
         // SAFETY:
-        // + The pointer we read from always points to a valid memory region because we allocated
-        // for an array of size `N`, and `self.len <= N` when all invariants are held.
-        // + Any pointer between `self.ptr().add(len)` and `self.ptr().add(self.len)` is guaranteed
-        // to have been initialized.
+        // + `self.len <= N` is an invariant.
+        // + `self.ptr()` is valid and non-null.
+        // + `self.ptr()` points to an aligned array of size `N`.
+        // + `len <= self.len` due to the if statement.
+        // + Only elements whose index is in `[len, self.len)` are accessed.
+        // + The first `self.len` elements are guaranteed to be initialized.
         unsafe {
             let s = std::ptr::slice_from_raw_parts_mut(self.ptr().add(len), self.len - len);
             std::ptr::drop_in_place(s);
@@ -133,10 +167,11 @@ impl<T, const N: usize> List<T, N> {
     /// Remove all values from the list.
     pub fn clear(&mut self) {
         // SAFETY:
-        // + The pointer we read from always points to a valid memory region because we allocated
-        // for an array of size `N`, and `self.len <= N` when all invariants are held.
-        // + Any pointer between `self.ptr()` and `self.ptr().add(self.len)` is guaranteed to have
-        // been initialized.
+        // + `self.len <= N` is an invariant.
+        // + `self.ptr()` is valid and non-null.
+        // + `self.ptr()` points to an aligned array of size `N`.
+        // + Only elements whose index is in `[0, self.len)` are accessed.
+        // + The first `self.len` elements are guaranteed to be initialized.
         unsafe {
             let s = std::ptr::slice_from_raw_parts_mut(self.ptr(), self.len);
             std::ptr::drop_in_place(s);
@@ -166,6 +201,9 @@ impl<T, const N: usize> Default for RawList<T, N> {
             NonNull::<T>::dangling()
         } else {
             let layout = Self::layout();
+            // SAFETY:
+            // + `N > 0` due to the if statement.
+            // + `size_of::<T>() > 0` due to the if statement.
             let nullable = unsafe { std::alloc::alloc(layout) };
             let Some(ptr) = NonNull::new(nullable.cast()) else {
                 std::alloc::handle_alloc_error(layout);
@@ -182,6 +220,11 @@ impl<T, const N: usize> Default for RawList<T, N> {
 impl<T, const N: usize> Drop for RawList<T, N> {
     fn drop(&mut self) {
         if !Self::is_zst() {
+            // SAFETY:
+            // + `N > 0` due to the if statement.
+            // + `size_of::<T>() > 0` due to the if statement.
+            // + `self.ptr()` is valid and non-null.
+            // + `self.ptr()` points to an aligned array of size `N`.
             unsafe {
                 std::alloc::dealloc(self.ptr.as_ptr().cast(), Self::layout());
             }
@@ -205,134 +248,147 @@ impl<T, const N: usize> RawList<T, N> {
 
 #[cfg(test)]
 mod tests {
-    use super::List;
+    use std::rc::Rc;
 
-    const TEST_VEC_SIZE: usize = 256;
-    type TestVec = List<usize, TEST_VEC_SIZE>;
+    const TEST_LIST_SIZE: usize = 256;
+    type List<T> = super::List<T, TEST_LIST_SIZE>;
 
     #[test]
-    fn test_vec_init() {
-        let s = TestVec::default();
-        assert_eq!(0, s.len());
+    fn last_in_first_out() {
+        let mut l = List::default();
+        for i in 0..TEST_LIST_SIZE {
+            unsafe { l.push_unchecked(i) };
+        }
+        for i in (0..TEST_LIST_SIZE).rev() {
+            assert_eq!(i, l.pop());
+        }
     }
 
     #[test]
-    fn test_vec_push_until_limit() {
-        let mut s = TestVec::default();
-        for i in 0..TEST_VEC_SIZE {
-            unsafe { s.push_unchecked(i) };
+    fn last() {
+        let mut l = List::default();
+        for i in 0..TEST_LIST_SIZE {
+            unsafe { l.push_unchecked(i) };
         }
-        assert_eq!(TEST_VEC_SIZE, s.len());
+        for i in 0..TEST_LIST_SIZE {
+            let top = *l.last(i);
+            assert_eq!(TEST_LIST_SIZE - i - 1, top);
+        }
     }
 
     #[test]
-    fn test_vec_pop_returns_in_lifo_order() {
-        let mut s = TestVec::default();
-        for i in 0..TEST_VEC_SIZE {
-            unsafe { s.push_unchecked(i) };
+    fn last_mut() {
+        let mut l = List::default();
+        for i in 0..TEST_LIST_SIZE {
+            unsafe { l.push_unchecked(i) };
         }
-        // Should receive things in reverse order
-        for i in (0..TEST_VEC_SIZE).rev() {
-            assert_eq!(i, s.pop());
+        for i in 0..TEST_LIST_SIZE {
+            *l.last_mut(i) = i;
         }
+        for i in 0..TEST_LIST_SIZE {
+            assert_eq!(TEST_LIST_SIZE - i - 1, l.get(i).copied().unwrap());
+        }
+    }
+
+    #[test]
+    fn values_are_dropped_when_calling_pop() {
+        let mut l = List::<Rc<()>>::default();
+        let v0 = Rc::new(());
+        let v1 = Rc::new(());
+        let w0 = Rc::downgrade(&Rc::clone(&v0));
+        let w1 = Rc::downgrade(&Rc::clone(&v1));
+        unsafe {
+            l.push_unchecked(v0);
+            l.push_unchecked(v1);
+        }
+
+        assert!(w0.upgrade().is_some());
+        assert!(w1.upgrade().is_some());
+
+        l.pop();
+        assert!(w0.upgrade().is_some());
+        assert!(w1.upgrade().is_none());
+
+        l.pop();
+        assert!(w0.upgrade().is_none());
+        assert!(w1.upgrade().is_none());
+    }
+
+    #[test]
+    fn values_are_dropped_when_calling_truncate() {
+        let mut l = List::<Rc<()>>::default();
+        let v0 = Rc::new(());
+        let v1 = Rc::new(());
+        let w0 = Rc::downgrade(&Rc::clone(&v0));
+        let w1 = Rc::downgrade(&Rc::clone(&v1));
+        unsafe {
+            l.push_unchecked(v0);
+            l.push_unchecked(v1);
+        }
+
+        assert!(w0.upgrade().is_some());
+        assert!(w1.upgrade().is_some());
+
+        l.truncate(1);
+        assert!(w0.upgrade().is_some());
+        assert!(w1.upgrade().is_none());
+    }
+
+    #[test]
+    fn values_are_dropped_when_calling_clear() {
+        let mut l = List::<Rc<()>>::default();
+        let v0 = Rc::new(());
+        let v1 = Rc::new(());
+        let w0 = Rc::downgrade(&Rc::clone(&v0));
+        let w1 = Rc::downgrade(&Rc::clone(&v1));
+        unsafe {
+            l.push_unchecked(v0);
+            l.push_unchecked(v1);
+        }
+
+        assert!(w0.upgrade().is_some());
+        assert!(w1.upgrade().is_some());
+
+        l.clear();
+        assert!(w0.upgrade().is_none());
+        assert!(w1.upgrade().is_none());
+    }
+
+    #[test]
+    fn values_are_dropped_when_dropping_list() {
+        let mut l = List::<Rc<()>>::default();
+        let v0 = Rc::new(());
+        let v1 = Rc::new(());
+        let w0 = Rc::downgrade(&Rc::clone(&v0));
+        let w1 = Rc::downgrade(&Rc::clone(&v1));
+        unsafe {
+            l.push_unchecked(v0);
+            l.push_unchecked(v1);
+        }
+
+        assert!(w0.upgrade().is_some());
+        assert!(w1.upgrade().is_some());
+
+        drop(l);
+        assert!(w0.upgrade().is_none());
+        assert!(w1.upgrade().is_none());
     }
 
     #[test]
     #[should_panic(expected = "attempt to subtract with overflow")]
-    fn test_vec_pop_panics_on_empty() {
-        let mut s = TestVec::default();
-        // BOOOMM
-        s.pop();
-    }
-
-    #[test]
-    fn test_vec_at_returns_correct_item() {
-        let mut s = TestVec::default();
-        for i in 0..TEST_VEC_SIZE {
-            unsafe { s.push_unchecked(i) };
-        }
-        // Should receive the correct item at each index
-        for i in 0..TEST_VEC_SIZE {
-            assert_eq!(i, unsafe { *s.get_unchecked(i) });
-        }
-    }
-
-    #[test]
-    fn test_vec_at_mut_modifies_correct_item() {
-        let mut s = TestVec::default();
-        for i in 0..TEST_VEC_SIZE {
-            unsafe { s.push_unchecked(i) };
-        }
-        // Change the values
-        for (i, v) in (0..TEST_VEC_SIZE).zip((0..TEST_VEC_SIZE).rev()) {
-            unsafe { *s.get_unchecked_mut(i) = v }
-        }
-        // Should receive things in increasing order
-        for i in 0..TEST_VEC_SIZE {
-            assert_eq!(i, s.pop());
-        }
-    }
-
-    #[test]
-    fn test_vec_top_returns_correct_item() {
-        let mut s = TestVec::default();
-        for i in 0..TEST_VEC_SIZE {
-            unsafe { s.push_unchecked(i) };
-        }
-        // Top should return the same value as pop
-        for _ in 0..TEST_VEC_SIZE {
-            let top = *s.last(0);
-            assert_eq!(s.pop(), top);
-        }
-    }
-
-    #[test]
-    fn test_vec_top_mut_modifies_correct_item() {
-        let mut s = TestVec::default();
-        for i in 0..TEST_VEC_SIZE {
-            unsafe { s.push_unchecked(i) };
-        }
-        // Top should return the same value as pop
-        for i in 0..TEST_VEC_SIZE {
-            *s.last_mut(0) = i;
-            let pop = s.pop();
-            assert_eq!(pop, i);
-        }
+    fn panics_when_calling_pop_on_empty_list() {
+        List::<()>::default().pop();
     }
 
     #[test]
     #[should_panic(expected = "attempt to subtract with overflow")]
-    fn test_vec_top_panics_when_empty() {
-        let s = TestVec::default();
-        s.last(0);
+    fn panics_when_calling_last_on_empty_list() {
+        List::<()>::default().last(0);
     }
 
     #[test]
     #[should_panic(expected = "attempt to subtract with overflow")]
-    fn test_vec_top_mut_panics_when_empty() {
-        let mut s = TestVec::default();
-        s.last_mut(0);
-    }
-
-    #[test]
-    fn test_vec_iter() {
-        let mut s = TestVec::default();
-        for i in 0..TEST_VEC_SIZE {
-            unsafe { s.push_unchecked(i) };
-        }
-        for (i, it) in (0..TEST_VEC_SIZE).zip(s.iter()) {
-            assert_eq!(i, *it);
-        }
-    }
-
-    #[test]
-    fn test_vec_iter_rev() {
-        let mut s = TestVec::default();
-        for i in 0..TEST_VEC_SIZE {
-            unsafe { s.push_unchecked(i) };
-        }
-        for (i, it) in (0..TEST_VEC_SIZE).rev().zip(s.iter().rev()) {
-            assert_eq!(i, *it);
-        }
+    fn panics_when_calling_last_mut_on_empty_list() {
+        List::<()>::default().last_mut(0);
     }
 }
