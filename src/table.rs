@@ -9,6 +9,44 @@ pub struct Table<V> {
     capacity: Cell<usize>,
     occupants: Cell<usize>,
     tombstones: Cell<usize>,
+    marker: PhantomData<[Entry<V>]>,
+}
+
+impl<V> Default for Table<V> {
+    fn default() -> Self {
+        Self {
+            ptr: Cell::new(NonNull::dangling()),
+            capacity: Cell::new(0),
+            occupants: Cell::new(0),
+            tombstones: Cell::new(0),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<V> Drop for Table<V> {
+    fn drop(&mut self) {
+        // SAFETY: We ensure both `self.ptr` and `self.capacity` represent a valid array.
+        unsafe { Self::dealloc(self.ptr.get().as_ptr(), self.capacity.get()) };
+    }
+}
+
+impl<'table, V> IntoIterator for &'table Table<V>
+where
+    V: Copy,
+{
+    type Item = (RefString, V);
+
+    type IntoIter = Iter<'table, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Self::IntoIter {
+            ptr: self.ptr.get(),
+            offset: 0,
+            capacity: self.capacity.get(),
+            marker: PhantomData,
+        }
+    }
 }
 
 impl<V> Table<V> {
@@ -52,16 +90,17 @@ impl<V> Table<V> {
         if occupants == 0 {
             return None;
         }
+
         let entry_ptr = self.probe(key);
         let existing = unsafe { std::ptr::replace(entry_ptr, Entry::Tombstone) };
-        if let Entry::Occupied(e) = existing {
-            let tombstones = self.tombstones.get();
-            self.occupants.set(occupants - 1);
-            self.tombstones.set(tombstones + 1);
-            Some(e.val)
-        } else {
-            None
-        }
+        let Entry::Occupied(existing) = existing else {
+            return None;
+        };
+
+        let tombstones = self.tombstones.get();
+        self.occupants.set(occupants - 1);
+        self.tombstones.set(tombstones + 1);
+        Some(existing.val)
     }
 
     /// Find the pointer to the key that matches the given string and hash.
@@ -75,15 +114,12 @@ impl<V> Table<V> {
         loop {
             // SAFETY: `index` is always less than `self.capacity` because `index = x mod self.capacity`,
             // where `x` is an arbitrary integer value.
-            let entry = unsafe { &*self.ptr.get().as_ptr().add(index) };
-            match &entry {
+            match unsafe { &*self.ptr.get().as_ptr().add(index) } {
                 Entry::Vacant => return None,
-                Entry::Occupied(e) => {
-                    if e.key.as_ref().data == s {
-                        return Some(e.key);
-                    }
+                Entry::Occupied(e) if e.key.as_ref().data == s => {
+                    return Some(e.key);
                 }
-                Entry::Tombstone => {}
+                _ => {}
             }
             // Linear probing.
             index = (index + 1) & (capacity - 1);
@@ -101,21 +137,17 @@ impl<V> Table<V> {
             // where `x` is an arbitrary integer value.
             let entry_ptr = unsafe { self.ptr.get().as_ptr().add(index) };
             // SAFETY: `entry_ptr` is always a valid pointer to an initialized `Entry<V>`.
-            let entry = unsafe { &*entry_ptr };
-            match &entry {
+            match unsafe { &*entry_ptr } {
                 Entry::Vacant => {
                     return tombstone.unwrap_or(entry_ptr);
                 }
-                Entry::Tombstone => {
-                    if tombstone.is_none() {
-                        tombstone = Some(entry_ptr);
-                    }
+                Entry::Tombstone if tombstone.is_none() => {
+                    tombstone = Some(entry_ptr);
                 }
-                Entry::Occupied(e) => {
-                    if Gc::ptr_eq(e.key, key) {
-                        return entry_ptr;
-                    }
+                Entry::Occupied(e) if Gc::ptr_eq(e.key, key) => {
+                    return entry_ptr;
                 }
+                _ => {}
             }
             // Linear probing.
             index = (index + 1) & (capacity - 1);
@@ -207,42 +239,6 @@ where
     }
 }
 
-impl<'table, V> IntoIterator for &'table Table<V>
-where
-    V: Copy,
-{
-    type Item = (RefString, V);
-
-    type IntoIter = Iter<'table, V>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Self::IntoIter {
-            ptr: self.ptr.get(),
-            ptr_: PhantomData,
-            offset: 0,
-            capacity: self.capacity.get(),
-        }
-    }
-}
-
-impl<V> Default for Table<V> {
-    fn default() -> Self {
-        Self {
-            ptr: Cell::new(NonNull::dangling()),
-            capacity: Cell::new(0),
-            occupants: Cell::new(0),
-            tombstones: Cell::new(0),
-        }
-    }
-}
-
-impl<V> Drop for Table<V> {
-    fn drop(&mut self) {
-        // SAFETY: We ensure both `self.ptr` and `self.capacity` represent a valid array.
-        unsafe { Self::dealloc(self.ptr.get().as_ptr(), self.capacity.get()) };
-    }
-}
-
 #[derive(Debug)]
 enum Entry<V> {
     Vacant,
@@ -259,9 +255,9 @@ struct EntryInner<V> {
 #[derive(Debug)]
 pub struct Iter<'table, V> {
     ptr: NonNull<Entry<V>>,
-    ptr_: PhantomData<&'table Entry<V>>,
     offset: usize,
     capacity: usize,
+    marker: PhantomData<&'table Table<V>>,
 }
 
 impl<'table, V> Iterator for Iter<'table, V>
@@ -272,12 +268,11 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.offset < self.capacity {
+            self.offset += 1;
             // SAFETY: The caller of this function must ensure that `ptr` is a valid pointer to
             // the array of `Entry<V>` with the given `capacity`. Additionally, `self.offset`
             // is always less than `self.capacity`.
-            let entry = unsafe { &*self.ptr.as_ptr().add(self.offset) };
-            self.offset += 1;
-            if let Entry::Occupied(x) = entry {
+            if let Entry::Occupied(x) = unsafe { &*self.ptr.as_ptr().add(self.offset) } {
                 return Some((x.key, x.val));
             }
         }

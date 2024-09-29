@@ -157,7 +157,7 @@ impl<T, const N: usize> List<T, N> {
 #[derive(Debug)]
 struct RawList<T, const N: usize> {
     ptr: NonNull<T>,
-    ptr_: PhantomData<[T; N]>,
+    marker: PhantomData<[T; N]>,
 }
 
 impl<T, const N: usize> Default for RawList<T, N> {
@@ -174,7 +174,7 @@ impl<T, const N: usize> Default for RawList<T, N> {
         };
         Self {
             ptr,
-            ptr_: PhantomData,
+            marker: PhantomData,
         }
     }
 }
