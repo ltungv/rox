@@ -26,7 +26,6 @@ impl<V> Default for Table<V> {
 
 impl<V> Drop for Table<V> {
     fn drop(&mut self) {
-        // SAFETY: We ensure both `self.ptr` and `self.capacity` represent a valid array.
         unsafe { Self::dealloc(self.ptr.get().as_ptr(), self.capacity.get()) };
     }
 }
@@ -112,8 +111,6 @@ impl<V> Table<V> {
         let capacity = self.capacity.get();
         let mut index = hash as usize & (capacity - 1);
         loop {
-            // SAFETY: `index` is always less than `self.capacity` because `index = x mod self.capacity`,
-            // where `x` is an arbitrary integer value.
             match unsafe { &*self.ptr.get().as_ptr().add(index) } {
                 Entry::Vacant => return None,
                 Entry::Occupied(e) if e.key.as_ref().data == s => {
@@ -133,10 +130,7 @@ impl<V> Table<V> {
         let mut tombstone = None;
         let mut index = key.as_ref().hash as usize & (capacity - 1);
         loop {
-            // SAFETY: `index` is always less than `self.capacity` because `index = x mod self.capacity`,
-            // where `x` is an arbitrary integer value.
             let entry_ptr = unsafe { self.ptr.get().as_ptr().add(index) };
-            // SAFETY: `entry_ptr` is always a valid pointer to an initialized `Entry<V>`.
             match unsafe { &*entry_ptr } {
                 Entry::Vacant => {
                     return tombstone.unwrap_or(entry_ptr);
@@ -160,14 +154,12 @@ impl<V> Table<V> {
         let old_capacity = self.capacity.get();
         let new_capacity = old_capacity.mul(2).max(8);
         let old_ptr = self.ptr.get().as_ptr();
-        // SAFETY: We ensure that `self.capacity` has a minimum value of 8 at this point.
         let ptr = unsafe { Self::alloc(new_capacity) };
         self.ptr.set(ptr);
         self.capacity.set(new_capacity);
         self.tombstones.set(0);
         // Rehash existing entries and copy them over to the new array. Tombstones are ignored.
         for i in 0..old_capacity {
-            // SAFETY: We only access pointers in the range of `old_ptr` and `old_ptr + old_capacity`.
             let entry_old_ptr = unsafe { old_ptr.add(i) };
             let entry_old = unsafe { &*entry_old_ptr };
             if let Entry::Occupied(e) = entry_old {
@@ -177,9 +169,6 @@ impl<V> Table<V> {
                 }
             }
         }
-        // Deallocate the old array.
-        // SAFETY: We ensure both `self.ptr` and `self.capacity` represent a valid array
-        // that was previously allocated.
         unsafe { Self::dealloc(old_ptr, old_capacity) };
     }
 
@@ -190,13 +179,10 @@ impl<V> Table<V> {
     ///
     /// `capacity` must be larger than 0, otherwise, it's undefined behavior.
     unsafe fn alloc(capacity: usize) -> NonNull<Entry<V>> {
-        // SAFETY: The caller of this function must ensure that `capacity` is larger than 0.
         let ptr: *mut Entry<V> = unsafe { alloc::alloc(Self::entries_layout(capacity)).cast() };
         for i in 0..capacity {
-            // SAFETY: We only access pointers in the range of `ptr` and `ptr + capacity`.
             unsafe { ptr.add(i).write(Entry::Vacant) };
         }
-        // SAFETY: We just allocated, thus `ptr` must be non-null.
         unsafe { NonNull::new_unchecked(ptr) }
     }
 
@@ -208,8 +194,6 @@ impl<V> Table<V> {
     /// + `ptr` must be allocated with the same allocator as `Self::alloc`.
     unsafe fn dealloc(ptr: *mut Entry<V>, capacity: usize) {
         if capacity > 0 {
-            // SAFETY: The caller of this function must ensure that `ptr` is a valid pointer to
-            // the array of `Entry<V>` with the given `capacity`.
             unsafe { alloc::dealloc(ptr.cast(), Self::entries_layout(capacity)) };
         }
     }
@@ -268,11 +252,9 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.offset < self.capacity {
+            let entry_ptr = unsafe { self.ptr.as_ptr().add(self.offset) };
             self.offset += 1;
-            // SAFETY: The caller of this function must ensure that `ptr` is a valid pointer to
-            // the array of `Entry<V>` with the given `capacity`. Additionally, `self.offset`
-            // is always less than `self.capacity`.
-            if let Entry::Occupied(x) = unsafe { &*self.ptr.as_ptr().add(self.offset) } {
+            if let Entry::Occupied(x) = unsafe { &*entry_ptr } {
                 return Some((x.key, x.val));
             }
         }
