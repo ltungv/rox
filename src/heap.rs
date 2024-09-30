@@ -96,7 +96,7 @@ impl Heap {
         let mut curr_obj = self.head;
 
         let mut dangling_strings = Vec::with_capacity(self.strings.len());
-        for (k, ()) in &self.strings {
+        for (&k, ()) in &self.strings {
             if !k.is_marked() {
                 dangling_strings.push(k);
             }
@@ -197,7 +197,9 @@ impl Drop for Heap {
         // Safety: If the heap is drop, both the compiler and VM are no longer
         // in use so.
         for object in &*self {
-            unsafe { self.dealloc(object) };
+            unsafe {
+                self.dealloc(object);
+            }
         }
 
         debug_assert_eq!(0, self.alloc_bytes);

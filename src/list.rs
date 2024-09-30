@@ -20,7 +20,9 @@ impl<T, const N: usize> Drop for List<T, N> {
         // + `self.ptr()` is valid and non-null.
         // + `self.ptr()` points to an aligned array of size `N`.
         // + The first `self.len` elements are guaranteed to be initialized.
-        unsafe { std::ptr::drop_in_place(s) };
+        unsafe {
+            std::ptr::drop_in_place(s);
+        }
     }
 }
 
@@ -257,7 +259,9 @@ mod tests {
     fn last_in_first_out() {
         let mut l = List::default();
         for i in 0..TEST_LIST_SIZE {
-            unsafe { l.push_unchecked(i) };
+            unsafe {
+                l.push_unchecked(i);
+            }
         }
         for i in (0..TEST_LIST_SIZE).rev() {
             assert_eq!(i, l.pop());
@@ -268,7 +272,9 @@ mod tests {
     fn last() {
         let mut l = List::default();
         for i in 0..TEST_LIST_SIZE {
-            unsafe { l.push_unchecked(i) };
+            unsafe {
+                l.push_unchecked(i);
+            }
         }
         for i in 0..TEST_LIST_SIZE {
             let top = *l.last(i);
@@ -280,7 +286,9 @@ mod tests {
     fn last_mut() {
         let mut l = List::default();
         for i in 0..TEST_LIST_SIZE {
-            unsafe { l.push_unchecked(i) };
+            unsafe {
+                l.push_unchecked(i);
+            }
         }
         for i in 0..TEST_LIST_SIZE {
             *l.last_mut(i) = i;
@@ -292,7 +300,7 @@ mod tests {
 
     #[test]
     fn values_are_dropped_when_calling_pop() {
-        let mut l = List::<Rc<()>>::default();
+        let mut l = List::default();
         let v0 = Rc::new(());
         let v1 = Rc::new(());
         let w0 = Rc::downgrade(&Rc::clone(&v0));
@@ -302,21 +310,21 @@ mod tests {
             l.push_unchecked(v1);
         }
 
-        assert!(w0.upgrade().is_some());
-        assert!(w1.upgrade().is_some());
+        assert_eq!(1, w0.strong_count());
+        assert_eq!(1, w1.strong_count());
 
         l.pop();
-        assert!(w0.upgrade().is_some());
-        assert!(w1.upgrade().is_none());
+        assert_eq!(1, w0.strong_count());
+        assert_eq!(0, w1.strong_count());
 
         l.pop();
-        assert!(w0.upgrade().is_none());
-        assert!(w1.upgrade().is_none());
+        assert_eq!(0, w0.strong_count());
+        assert_eq!(0, w1.strong_count());
     }
 
     #[test]
     fn values_are_dropped_when_calling_truncate() {
-        let mut l = List::<Rc<()>>::default();
+        let mut l = List::default();
         let v0 = Rc::new(());
         let v1 = Rc::new(());
         let w0 = Rc::downgrade(&Rc::clone(&v0));
@@ -326,17 +334,17 @@ mod tests {
             l.push_unchecked(v1);
         }
 
-        assert!(w0.upgrade().is_some());
-        assert!(w1.upgrade().is_some());
+        assert_eq!(1, w0.strong_count());
+        assert_eq!(1, w1.strong_count());
 
         l.truncate(1);
-        assert!(w0.upgrade().is_some());
-        assert!(w1.upgrade().is_none());
+        assert_eq!(1, w0.strong_count());
+        assert_eq!(0, w1.strong_count());
     }
 
     #[test]
     fn values_are_dropped_when_calling_clear() {
-        let mut l = List::<Rc<()>>::default();
+        let mut l = List::default();
         let v0 = Rc::new(());
         let v1 = Rc::new(());
         let w0 = Rc::downgrade(&Rc::clone(&v0));
@@ -346,17 +354,17 @@ mod tests {
             l.push_unchecked(v1);
         }
 
-        assert!(w0.upgrade().is_some());
-        assert!(w1.upgrade().is_some());
+        assert_eq!(1, w0.strong_count());
+        assert_eq!(1, w1.strong_count());
 
         l.clear();
-        assert!(w0.upgrade().is_none());
-        assert!(w1.upgrade().is_none());
+        assert_eq!(0, w0.strong_count());
+        assert_eq!(0, w1.strong_count());
     }
 
     #[test]
     fn values_are_dropped_when_dropping_list() {
-        let mut l = List::<Rc<()>>::default();
+        let mut l = List::default();
         let v0 = Rc::new(());
         let v1 = Rc::new(());
         let w0 = Rc::downgrade(&Rc::clone(&v0));
@@ -366,12 +374,12 @@ mod tests {
             l.push_unchecked(v1);
         }
 
-        assert!(w0.upgrade().is_some());
-        assert!(w1.upgrade().is_some());
+        assert_eq!(1, w0.strong_count());
+        assert_eq!(1, w1.strong_count());
 
         drop(l);
-        assert!(w0.upgrade().is_none());
-        assert!(w1.upgrade().is_none());
+        assert_eq!(0, w0.strong_count());
+        assert_eq!(0, w1.strong_count());
     }
 
     #[test]

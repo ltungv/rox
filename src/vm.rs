@@ -389,7 +389,7 @@ impl VirtualMachine {
             .as_class()
             .map_err(|_| RuntimeError::InvalidSuperclass)?;
         let subclass = self.stack_top(0).as_class()?;
-        for (method_name, method) in &superclass.as_ref().methods {
+        for (&method_name, &method) in &superclass.as_ref().methods {
             subclass.as_ref().methods.set(method_name, method);
         }
         self.stack_pop();
@@ -818,7 +818,9 @@ impl VirtualMachine {
         }
         // SAFETY: We make sure that the sweep step has correctly mark all reachable objects, so
         // sweep can be run safely.
-        unsafe { self.heap.sweep() };
+        unsafe {
+            self.heap.sweep();
+        }
     }
 
     fn mark_roots(&mut self) {
@@ -841,7 +843,7 @@ impl VirtualMachine {
                 self.grey_objects.push(Object::Upvalue(*upvalue));
             }
         }
-        for (k, v) in &self.globals {
+        for (&k, &v) in &self.globals {
             if k.mark() {
                 self.grey_objects.push(Object::String(k));
             }
@@ -887,7 +889,9 @@ impl VirtualMachine {
             return Err(RuntimeError::StackOverflow);
         }
         // SAFETY: We already checked if the stack frame is full.
-        unsafe { self.frames.push_unchecked(frame) };
+        unsafe {
+            self.frames.push_unchecked(frame);
+        }
         Ok(frame_count)
     }
 
@@ -900,7 +904,9 @@ impl VirtualMachine {
             return Err(RuntimeError::StackOverflow);
         }
         // SAFETY: We already checked if the stack is full.
-        unsafe { self.stack.push_unchecked(value) };
+        unsafe {
+            self.stack.push_unchecked(value);
+        }
         Ok(())
     }
 

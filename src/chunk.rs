@@ -31,7 +31,9 @@ impl Chunk {
         u8::try_from(self.constants.len()).ok().inspect(|_| {
             // SAFETY: We already checked if the number of constants is valid by limiting the size
             // of our constant vector to `u8::MAX`.
-            unsafe { self.constants.push_unchecked(value) };
+            unsafe {
+                self.constants.push_unchecked(value);
+            }
         })
     }
 

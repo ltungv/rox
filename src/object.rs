@@ -410,7 +410,7 @@ impl ObjClass {
         if self.name.mark() {
             grey_objects.push(Object::String(self.name));
         }
-        for (k, v) in &self.methods {
+        for (&k, &v) in &self.methods {
             if k.mark() {
                 grey_objects.push(Object::String(k));
             }
@@ -454,7 +454,7 @@ impl ObjInstance {
         if self.class.mark() {
             grey_objects.push(Object::Class(self.class));
         }
-        for (k, v) in &self.fields {
+        for (&k, &v) in &self.fields {
             if k.mark() {
                 grey_objects.push(Object::String(k));
             }
@@ -586,7 +586,7 @@ impl<T> Gc<T> {
     }
 
     pub unsafe fn release(self) {
-        let _ = Box::from_raw(self.ptr.as_ptr());
+        _ = Box::from_raw(self.ptr.as_ptr());
     }
 
     pub fn ptr_eq(lhs: Self, rhs: Self) -> bool {

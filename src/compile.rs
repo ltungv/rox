@@ -96,7 +96,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let fun = ObjFun::new(None);
         let mut compilers = List::default();
         // SAFETY: We just created `compilers` and are sure that it's not full.
-        unsafe { compilers.push_unchecked(Compiler::new(fun, FunctionType::Script)) };
+        unsafe {
+            compilers.push_unchecked(Compiler::new(fun, FunctionType::Script));
+        }
         Self {
             had_error: false,
             panicking: false,
@@ -437,7 +439,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             is_captured: false,
         };
         // SAFETY: We already checked if `locals` is full.
-        unsafe { compiler.locals.push_unchecked(local) };
+        unsafe {
+            compiler.locals.push_unchecked(local);
+        }
     }
 
     /// Put an identifier as a string object in the list of constant.
@@ -1129,7 +1133,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // Add the upvalue.
         let upvalue = Upvalue { is_local, index };
         // SAFETY: We already checked if `upvalues` is full.
-        unsafe { compiler.upvalues.push_unchecked(upvalue) };
+        unsafe {
+            compiler.upvalues.push_unchecked(upvalue);
+        }
         upvalue_count
     }
 
