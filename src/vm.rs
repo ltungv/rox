@@ -284,8 +284,9 @@ impl VirtualMachine {
             .as_instance()
             .map_err(|_| RuntimeError::InvalidMethodInvocation)?;
 
-        if let Some(field) = instance.as_ref().fields.get(method) {
-            *self.stack_top_mut(argc as usize) = field;
+        if let Some(&field) = instance.as_ref().fields.get(method) {
+            let stack_top = self.stack_top_mut(argc as usize);
+            *stack_top = field;
             self.call_value(field, argc)?;
         } else {
             self.invoke_from_class(instance.as_ref().class, method, argc)?;
@@ -306,7 +307,7 @@ impl VirtualMachine {
             .methods
             .get(name)
             .ok_or_else(|| RuntimeError::UndefinedProperty(name.as_ref().to_string()))?;
-        self.call_closure(method, argc)?;
+        self.call_closure(*method, argc)?;
         Ok(())
     }
 
@@ -322,7 +323,7 @@ impl VirtualMachine {
 
     fn bind_method(&mut self, class: RefClass, name: RefString) -> Result<bool, RuntimeError> {
         match class.as_ref().methods.get(name) {
-            Some(method) => {
+            Some(&method) => {
                 let (bound, _) = self.alloc_bound_method(ObjBoundMethod {
                     receiver: *self.stack_top(0),
                     method,
@@ -342,7 +343,7 @@ impl VirtualMachine {
             .as_instance()
             .map_err(|_| RuntimeError::ObjectHasNoProperty)?;
 
-        if let Some(value) = instance.as_ref().fields.get(name) {
+        if let Some(&value) = instance.as_ref().fields.get(name) {
             self.stack_pop();
             self.stack_push(value)?;
             Ok(())
@@ -579,7 +580,7 @@ impl VirtualMachine {
         let (instance, _) = self.alloc_instance(ObjInstance::new(callee));
         *self.stack_top_mut(argc.into()) = Value::Object(instance);
         // Call the 'init' method if there's one
-        if let Some(init) = callee.as_ref().methods.get(self.str_init) {
+        if let Some(&init) = callee.as_ref().methods.get(self.str_init) {
             self.call_closure(init, argc)?;
         } else if argc != 0 {
             return Err(RuntimeError::InvalidArgumentsCount { arity: 0, argc });
@@ -649,7 +650,7 @@ impl VirtualMachine {
             .globals
             .get(name)
             .ok_or_else(|| RuntimeError::UndefinedVariable(name.as_ref().to_string()))?;
-        self.stack_push(value)?;
+        self.stack_push(*value)?;
         Ok(())
     }
 

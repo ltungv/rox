@@ -1,4 +1,4 @@
-use std::{alloc, cell::Cell, marker::PhantomData, ops::Mul, ptr::NonNull};
+use std::{alloc::Layout, cell::Cell, marker::PhantomData, ops::Mul, ptr::NonNull};
 
 use crate::object::{Gc, RefString};
 
@@ -27,6 +27,10 @@ impl<V> Default for Table<V> {
 impl<V> Drop for Table<V> {
     fn drop(&mut self) {
         let s = std::ptr::slice_from_raw_parts_mut(self.ptr(), self.cap.get());
+        // SAFETY:
+        // + `self.ptr()` is valid and non-null.
+        // + `self.ptr()` points to an aligned array of size `self.cap`.
+        // + All `self.cap` elements are guaranteed to be initialized.
         unsafe {
             std::ptr::drop_in_place(s);
             Self::dealloc(self.ptr(), self.cap.get());
@@ -34,10 +38,7 @@ impl<V> Drop for Table<V> {
     }
 }
 
-impl<'table, V> IntoIterator for &'table Table<V>
-where
-    V: Copy,
-{
+impl<'table, V> IntoIterator for &'table Table<V> {
     type Item = (&'table RefString, &'table V);
 
     type IntoIter = Iter<'table, V>;
@@ -45,34 +46,51 @@ where
     fn into_iter(self) -> Self::IntoIter {
         Self::IntoIter {
             ptr: self.ptr.get(),
-            offset: 0,
-            capacity: self.cap.get(),
+            idx: 0,
+            cap: self.cap.get(),
             marker: PhantomData,
         }
     }
 }
 
 impl<V> Table<V> {
-    /// Get the number of entries that are currently stored in the table.
+    /// Gets the number of entries in the table.
     pub fn len(&self) -> usize {
         self.lives.get()
     }
 
-    /// Set the value associated with the given key.
-    /// If the key is already present, the previous value is returned.
+    /// Returns a reference to the value corresponding to the key.
+    pub fn get(&self, key: RefString) -> Option<&V> {
+        if self.lives.get() == 0 {
+            return None;
+        }
+        // SAFETY:
+        // + `self.probe(_)` returns a valid pointer to a properly aligned and initialized entry.
+        if let Entry::Live(e) = unsafe { &*self.probe(key) } {
+            Some(&e.val)
+        } else {
+            None
+        }
+    }
+
+    /// Inserts a key-value pair into the map.
+    ///
+    /// If the map did not have this key present, [`None`] is returned.
+    ///
+    /// If the map did have this key present, the value is updated, and the old value is returned.
+    /// In this case, the key is not updated.
     pub fn set(&self, key: RefString, val: V) -> Option<V> {
-        let capacity = self.cap.get();
+        let cap = self.cap.get();
         let lives = self.lives.get();
         let deads = self.deads.get();
-        if lives + deads >= capacity * 3 / 4 {
+        if lives + deads >= cap * 3 / 4 {
             self.resize();
         }
-
-        let inner = EntryInner { key, val };
         let entry_ptr = self.probe(key);
-        let existing = unsafe { std::ptr::replace(entry_ptr, Entry::Live(inner)) };
-
-        match existing {
+        let entry_new = Entry::Live(EntryInner { key, val });
+        // SAFETY:
+        // + `self.probe(_)` returns a valid pointer to a properly aligned and initialized entry.
+        match unsafe { std::ptr::replace(entry_ptr, entry_new) } {
             Entry::Free => {
                 self.lives.set(lives + 1);
                 None
@@ -86,35 +104,38 @@ impl<V> Table<V> {
         }
     }
 
-    // Delete the value associated with the given key and return it.
-    // If the key is not present, `None` is returned.
+    /// Removes a key from the map, returning the value at the key if the key was previously in the map.
     pub fn del(&self, key: RefString) -> Option<V> {
         let lives = self.lives.get();
         if lives == 0 {
             return None;
         }
-
         let entry_ptr = self.probe(key);
-        let existing = unsafe { std::ptr::replace(entry_ptr, Entry::Dead) };
-        let Entry::Live(existing) = existing else {
+        // SAFETY:
+        // + `self.probe(_)` returns a valid pointer to a properly aligned and initialized entry.
+        let entry_old = unsafe { std::ptr::replace(entry_ptr, Entry::Dead) };
+        let Entry::Live(entry_old) = entry_old else {
             return None;
         };
-
         let deads = self.deads.get();
         self.lives.set(lives - 1);
         self.deads.set(deads + 1);
-        Some(existing.val)
+        Some(entry_old.val)
     }
 
-    /// Find the pointer to the key that matches the given string and hash.
-    // If no key matches, `None` is returned.
+    /// Returns a reference to the string object that matches the given string slice and hash value.
     pub fn find(&self, s: &str, hash: u32) -> Option<RefString> {
         if self.lives.get() == 0 {
             return None;
         }
-        let capacity = self.cap.get();
-        let mut index = hash as usize & (capacity - 1);
+        let cap = self.cap.get();
+        let mut index = hash as usize & (cap - 1);
         loop {
+            // SAFETY:
+            // + `index < self.cap`, guaranteed by the probing procedure.
+            // + `self.ptr()` is valid and non-null.
+            // + `self.ptr()` points to an aligned array of size `self.cap`.
+            // + Only elements whose index is in `[0, self.cap)` are accessed.
             match unsafe { &*self.ptr().add(index) } {
                 Entry::Free => return None,
                 Entry::Live(e) if e.key.as_ref().data == s => {
@@ -123,18 +144,33 @@ impl<V> Table<V> {
                 _ => {}
             }
             // Linear probing.
-            index = (index + 1) & (capacity - 1);
+            index = (index + 1) & (cap - 1);
         }
     }
 
-    /// Find the pointer to the entry associated with the given key. If the 2 different keys
-    /// have the same hash, linear probing is used to find the correct entry.
+    /// Returns a pointer to the entry corresponding to the key. The pointer is guaranteed to be
+    /// valid and pointers to an properly aligned and initialized `Entry<V>`.
+    ///
+    /// If the map did not have this key present, the returned pointer points to either a free
+    /// entry or the first dead entry corresponding to the key's hash.
+    ///
+    /// If the map did have this key present, the returned pointer points to a live entry
+    /// corresponding to the key.
     fn probe(&self, key: RefString) -> *mut Entry<V> {
-        let capacity = self.cap.get();
+        let cap = self.cap.get();
+        debug_assert!(cap > 0, "Capacity must be greater than 0");
         let mut dead = None;
-        let mut index = key.as_ref().hash as usize & (capacity - 1);
+        let mut index = key.as_ref().hash as usize & (cap - 1);
         loop {
+            // SAFETY:
+            // + `index < self.cap`, guaranteed by the probing procedure.
+            // + `self.ptr()` is valid and non-null.
+            // + `self.ptr()` points to an aligned array of size `self.cap`.
+            // + Only elements whose index is in `[0, self.cap)` are accessed.
             let entry_ptr = unsafe { self.ptr().add(index) };
+            // SAFETY:
+            // + The pointer is valid and points to a properly aligned and initialized entry,
+            // guaranteed by `Self::alloc(_)`.
             match unsafe { &*entry_ptr } {
                 Entry::Free => {
                     return dead.unwrap_or(entry_ptr);
@@ -148,33 +184,45 @@ impl<V> Table<V> {
                 _ => {}
             }
             // Linear probing.
-            index = (index + 1) & (capacity - 1);
+            index = (index + 1) & (cap - 1);
         }
     }
 
-    /// Resize the table to the given capacity.
+    /// Resizes the table by doubling its current capacity.
     fn resize(&self) {
         // Allocate the new array.
-        let old_capacity = self.cap.get();
-        let new_capacity = old_capacity.mul(2).max(8);
+        let old_cap = self.cap.get();
+        let new_cap = old_cap.mul(2).max(8);
         let old_ptr = self.ptr();
-        let ptr = unsafe { Self::alloc(new_capacity) };
-        self.ptr.set(ptr);
-        self.cap.set(new_capacity);
+        self.ptr.set(Self::alloc(new_cap));
+        self.cap.set(new_cap);
         self.deads.set(0);
         // Rehash existing entries and copy them over to the new array. Dead entries are ignored.
-        for i in 0..old_capacity {
+        for i in 0..old_cap {
+            // SAFETY:
+            // + `i < old_cap`, guaranteed by the loop condition.
+            // + `old_ptr` is valid and non-null.
+            // + `old_ptr` points to an aligned array of size `old_cap`.
+            // + Only elements whose index is in `[0, old_cap)` are accessed.
             let entry_old_ptr = unsafe { old_ptr.add(i) };
-            let entry_old = unsafe { &*entry_old_ptr };
-            if let Entry::Live(e) = entry_old {
+            // SAFETY:
+            // + The pointer is valid and points to a properly aligned and initialized entry,
+            // guaranteed by `Self::alloc(_)`.
+            if let Entry::Live(e) = unsafe { &*entry_old_ptr } {
                 let entry_new_ptr = self.probe(e.key);
+                // SAFETY:
+                // + Both pointers is valid and points to a properly aligned and initialized entry,
+                // guaranteed by `Self::alloc(_)`.
                 unsafe {
                     std::ptr::swap(entry_new_ptr, entry_old_ptr);
                 }
             }
         }
+        // SAFETY:
+        // + `old_ptr` is valid and non-null.
+        // + `old_ptr` points to an aligned array of size `old_cap`.
         unsafe {
-            Self::dealloc(old_ptr, old_capacity);
+            Self::dealloc(old_ptr, old_cap);
         }
     }
 
@@ -182,58 +230,56 @@ impl<V> Table<V> {
         self.ptr.get().as_ptr()
     }
 
-    /// Allocate an array of `Entry<V>` with the given capacity and return the raw pointer
-    /// to the beginning of the array.
-    ///
-    /// ## Safety
-    ///
-    /// `capacity` must be larger than 0, otherwise, it's undefined behavior.
-    unsafe fn alloc(capacity: usize) -> NonNull<Entry<V>> {
-        let ptr: *mut Entry<V> = unsafe { alloc::alloc(Self::entries_layout(capacity)).cast() };
-        for i in 0..capacity {
-            unsafe {
-                ptr.add(i).write(Entry::Free);
-            }
-        }
-        unsafe { NonNull::new_unchecked(ptr) }
-    }
-
-    /// Deallocate the array of `Entry<V>` with the given capacity.
-    ///
-    /// ## Safety
-    ///
-    /// + `ptr` must be a valid pointer to the array of `Entry<V>` with the given `capacity`.
-    /// + `ptr` must be allocated with the same allocator as `Self::alloc`.
-    unsafe fn dealloc(ptr: *mut Entry<V>, capacity: usize) {
-        if capacity > 0 {
-            unsafe {
-                alloc::dealloc(ptr.cast(), Self::entries_layout(capacity));
-            }
-        }
-    }
-
-    /// Return the memory layout of an array of `Entry<V>` with the given capacity.
-    fn entries_layout(cap: usize) -> alloc::Layout {
-        alloc::Layout::array::<Entry<V>>(cap).expect("invalid layout.")
-    }
-}
-
-impl<V> Table<V>
-where
-    V: Copy,
-{
-    // Get the value associated with the given key.
-    // If the key is not present, `None` is returned.
-    pub fn get(&self, key: RefString) -> Option<V> {
-        if self.lives.get() == 0 {
-            return None;
-        }
-        let entry = unsafe { &*self.probe(key) };
-        if let Entry::Live(e) = entry {
-            Some(e.val)
+    /// Allocates an array of `Entry<V>` of size `cap` and return the raw pointer to the
+    /// beginning of the array.
+    fn alloc(cap: usize) -> NonNull<Entry<V>> {
+        if cap == 0 {
+            NonNull::dangling()
         } else {
-            None
+            let layout = Self::layout(cap);
+            // SAFETY:
+            // + `cap > 0`, due to the if statement.
+            // + size_of::<Entry<V>>() can never be 0.
+            let nullable = unsafe { std::alloc::alloc(layout) };
+            let Some(ptr) = NonNull::new(nullable.cast()) else {
+                std::alloc::handle_alloc_error(layout);
+            };
+            for i in 0..cap {
+                // SAFETY:
+                // + `i < cap`, guaranteed by the loop condition.
+                // + `ptr` is valid and non-null.
+                // + `ptr` points to an aligned array of size `cap`.
+                // + Only elements whose index is in `[0, cap)` are accessed.
+                unsafe {
+                    ptr.add(i).write(Entry::Free);
+                }
+            }
+            ptr
         }
+    }
+
+    /// Deallocates the array of `Entry<V>` of size `cap`.
+    ///
+    /// # Safety
+    ///
+    /// + `ptr` is valid and non-null.
+    /// + `ptr` points to an aligned array of size `cap`.
+    unsafe fn dealloc(ptr: *mut Entry<V>, cap: usize) {
+        if cap > 0 {
+            // Safety:
+            // + `cap > 0`, due to the if statement.
+            // + size_of::<Entry<V>>() can never be 0.
+            // + `ptr` is valid and non-null, guaranteed by the caller.
+            // + `ptr` points to an aligned array of size `cap`, guaranteed by the caller.
+            unsafe {
+                std::alloc::dealloc(ptr.cast(), Self::layout(cap));
+            }
+        }
+    }
+
+    /// Return the memory layout of an array of `Entry<V>` of size `cap`.
+    fn layout(cap: usize) -> Layout {
+        Layout::array::<Entry<V>>(cap).expect("invalid layout.")
     }
 }
 
@@ -253,22 +299,24 @@ struct EntryInner<V> {
 #[derive(Debug)]
 pub struct Iter<'table, V> {
     ptr: NonNull<Entry<V>>,
-    offset: usize,
-    capacity: usize,
+    idx: usize,
+    cap: usize,
     marker: PhantomData<&'table Table<V>>,
 }
 
-impl<'table, V> Iterator for Iter<'table, V>
-where
-    V: Copy,
-{
+impl<'table, V> Iterator for Iter<'table, V> {
     type Item = (&'table RefString, &'table V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.offset < self.capacity {
-            let entry_ptr = unsafe { self.ptr.as_ptr().add(self.offset) };
-            self.offset += 1;
-            if let Entry::Live(x) = unsafe { &*entry_ptr } {
+        while self.idx < self.cap {
+            // SAFETY:
+            // + `self.idx < self.cap`, guaranteed by the loop condition.
+            // + `self.ptr` is valid and non-null.
+            // + `self.ptr` points to an aligned array of size `self.cap`.
+            // + Only elements whose index is in `[0, self.cap)` are accessed.
+            let entry = unsafe { &*self.ptr.as_ptr().add(self.idx) };
+            self.idx += 1;
+            if let Entry::Live(x) = entry {
                 return Some((&x.key, &x.val));
             }
         }
@@ -300,8 +348,8 @@ mod tests {
 
         assert_eq!(2, table.lives.get());
         assert_eq!(0, table.deads.get());
-        assert_eq!(Some(Value::Bool(true)), table.get(key1));
-        assert_eq!(Some(Value::Number(PI)), table.get(key2));
+        assert_eq!(Some(Value::Bool(true)), table.get(key1).copied());
+        assert_eq!(Some(Value::Number(PI)), table.get(key2).copied());
     }
 
     #[test]
@@ -314,13 +362,13 @@ mod tests {
         assert_eq!(1, table.lives.get());
         assert_eq!(0, table.deads.get());
         assert_eq!(None, prev);
-        assert_eq!(Some(Value::Bool(true)), table.get(key));
+        assert_eq!(Some(Value::Bool(true)), table.get(key).copied());
 
         let prev = table.set(key, Value::Number(PI));
         assert_eq!(1, table.lives.get());
         assert_eq!(0, table.deads.get());
         assert_eq!(Some(Value::Bool(true)), prev);
-        assert_eq!(Some(Value::Number(PI)), table.get(key));
+        assert_eq!(Some(Value::Number(PI)), table.get(key).copied());
     }
 
     #[test]
@@ -333,7 +381,7 @@ mod tests {
         assert_eq!(1, table.lives.get());
         assert_eq!(0, table.deads.get());
         assert_eq!(None, prev);
-        assert_eq!(Some(Value::Bool(true)), table.get(key));
+        assert_eq!(Some(Value::Bool(true)), table.get(key).copied());
 
         table.del(key);
         assert_eq!(0, table.lives.get());
@@ -344,7 +392,7 @@ mod tests {
         assert_eq!(1, table.lives.get());
         assert_eq!(0, table.deads.get());
         assert_eq!(None, prev);
-        assert_eq!(Some(Value::Bool(false)), table.get(key));
+        assert_eq!(Some(Value::Bool(false)), table.get(key).copied());
     }
 
     #[test]
@@ -416,13 +464,11 @@ mod tests {
             assert_eq!(1, weak.strong_count());
         }
 
-        for i in 6..7 {
-            let key = heap.intern(i.to_string());
-            let val = Rc::new(());
-            let weak = Rc::downgrade(&Rc::clone(&val));
-            weaks.push(weak);
-            table.set(key, val);
-        }
+        let key = heap.intern("resize".to_string());
+        let val = Rc::new(());
+        let weak = Rc::downgrade(&Rc::clone(&val));
+        weaks.push(weak);
+        table.set(key, val);
 
         // Check that values are not dropped after a resize.
         assert_eq!(16, table.cap.get());

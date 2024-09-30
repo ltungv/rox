@@ -115,7 +115,7 @@ impl<T, const N: usize> List<T, N> {
     pub unsafe fn push_unchecked(&mut self, value: T) {
         debug_assert!(
             self.len < N,
-            "Pushing to a full list is an undefined behavior"
+            "pushing to a full list is an undefined behavior"
         );
         // SAFETY:
         // + `self.len < N`, guaranteed by the caller.
