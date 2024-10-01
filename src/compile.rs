@@ -287,7 +287,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             // Load subclass onto the stack.
             self.named_variable(class_name, false);
             self.emit(Opcode::Inherit);
-            self.class_compiler_mut(0).has_super = true;
+            self.classes.last_mut(0).has_super = true;
         }
 
         // Put the class object back onto the stack.
@@ -302,7 +302,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit(Opcode::Pop);
 
         // End the scope that we began when inheriting.
-        if self.class_compiler(0).has_super {
+        if self.classes.last(0).has_super {
             self.end_scope();
         }
 
@@ -351,7 +351,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.consume(Kind::LParen, "Expect '(' after function name.");
         if !self.check_curr(Kind::RParen) {
             loop {
-                let compiler = self.compiler_mut(0);
+                let compiler = self.compilers.last_mut(0);
                 if compiler.fun.arity as usize == MAX_PARAMS {
                     self.error_curr("Can't have more than 255 parameters.");
                     return;
@@ -392,7 +392,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn parse_variable(&mut self, message: &str) -> u8 {
         self.consume(Kind::Ident, message);
         self.declare_variable();
-        if self.compiler(0).scope_depth > 0 {
+        if self.compilers.last(0).scope_depth > 0 {
             // Return a dummy constant id if we're in a local scope. Local variable don't
             // need to store their names as constants because we access them at runtime
             // through the stack index.
@@ -405,7 +405,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Try to declare a local variable.
     fn declare_variable(&mut self) {
         let name = self.token_prev;
-        let compiler = self.compiler_mut(0);
+        let compiler = self.compilers.last_mut(0);
         // Skip this step for global scope.
         if compiler.scope_depth > 0 {
             for local in compiler.locals.iter().rev() {
@@ -424,7 +424,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn add_local(&mut self, name: Token<'src>) {
-        let compiler = self.compiler_mut(0);
+        let compiler = self.compilers.last_mut(0);
         let local_count = compiler.locals.len();
         if local_count == MAX_LOCALS {
             self.error_prev("Too many local variables in function.");
@@ -458,7 +458,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // value. We have already executed the code for the variable’s initializer (or the
         // implicit nil), and that value is sitting right on top of the stack as the only
         // remaining temporary.
-        if self.compiler(0).scope_depth > 0 {
+        if self.compilers.last(0).scope_depth > 0 {
             // Mark declared variable as initialized
             self.mark_initialized();
         } else {
@@ -492,7 +492,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// variable declaration has been parsed, we went back to the local to set its depth to the
     /// correct value.
     fn mark_initialized(&mut self) {
-        let compiler = self.compiler_mut(0);
+        let compiler = self.compilers.last_mut(0);
         // Do nothing if we are in the global scope.
         if compiler.scope_depth > 0 {
             compiler.locals.last_mut(0).depth = compiler.scope_depth;
@@ -601,7 +601,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// ```
     fn while_statement(&mut self) {
         // Track the start of the loop where we can jump back to.
-        let loop_start = self.compiler(0).fun.chunk.instructions.len();
+        let loop_start = self.compilers.last(0).fun.chunk.instructions.len();
         // Conditional part.
         self.consume(Kind::LParen, "Expect '(' after 'while'.");
         self.expression();
@@ -640,7 +640,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.expression_statement();
         }
         // Loop's condition.
-        let loop_start = self.compiler(0).fun.chunk.instructions.len();
+        let loop_start = self.compilers.last(0).fun.chunk.instructions.len();
         let jump_exit = if self.advance_if(Kind::Semicolon) {
             // The conditional part is empty, so we don't have to emit a jump instruction.
             None
@@ -663,7 +663,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             // executed first.
             let jump_to_body = self.emit_jump(Opcode::Jump);
             // Keep track of the incrementor's starting position.
-            let increment_start = self.compiler(0).fun.chunk.instructions.len();
+            let increment_start = self.compilers.last(0).fun.chunk.instructions.len();
             // Parse expression and ignore its result at runtime.
             self.expression();
             self.emit(Opcode::Pop);
@@ -700,7 +700,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// returnStmt --> "return" expr? ";" ;
     /// ```
     fn return_statement(&mut self) {
-        if self.compiler(0).fun_type == FunctionType::Script {
+        if self.compilers.last(0).fun_type == FunctionType::Script {
             self.error_prev("Can't return from top-level code.");
             return;
         }
@@ -708,7 +708,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if self.advance_if(Kind::Semicolon) {
             self.emit_return();
         } else {
-            if self.compiler(0).fun_type == FunctionType::Initializer {
+            if self.compilers.last(0).fun_type == FunctionType::Initializer {
                 self.error_prev("Can't return a value from an initializer.");
             }
             // Returned the value of an expression.
@@ -985,7 +985,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn super_(&mut self) {
         if self.classes.len() == 0 {
             self.error_prev("Can't use 'super' outside of a class.");
-        } else if !self.class_compiler(0).has_super {
+        } else if !self.classes.last(0).has_super {
             self.error_prev("Can't use 'super' in a class with no superclass.");
         }
 
@@ -1072,7 +1072,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             return None;
         }
         // Walk up from low scope to high scope to find a local with the given name.
-        let compiler = self.compiler(height);
+        let compiler = self.compilers.last(height);
         for (id, local) in (0..=u8::MAX).zip(compiler.locals.iter()).rev() {
             if local.name == name.lexeme {
                 if local.depth == -1 {
@@ -1098,8 +1098,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if let Some(local) = self.resolve_local(name, height + 1) {
             // Mark the variable in the enclosing function as captured so we know to emit the
             // correct opcode for hoisting up the upvalue.
+            // SAFETY: `resolve_local` ensures that the returned index is within bounds.
             unsafe {
-                self.compiler_mut(height + 1)
+                self.compilers
+                    .last_mut(height + 1)
                     .locals
                     .get_unchecked_mut(local as usize)
                     .is_captured = true;
@@ -1120,12 +1122,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// corresponding upvalue is returned instead of adding a new upvalue.
     fn add_upvalue(&mut self, height: usize, index: u8, is_local: bool) -> u8 {
         // Find an upvalue that references the same index.
-        for (upvalue_id, upvalue) in (0..=u8::MAX).zip(&*self.compiler(height).upvalues) {
+        for (upvalue_id, upvalue) in (0..=u8::MAX).zip(&*self.compilers.last(height).upvalues) {
             if upvalue.index == index && upvalue.is_local == is_local {
                 return upvalue_id;
             }
         }
-        let compiler = self.compiler_mut(height);
+        let compiler = self.compilers.last_mut(height);
         let Ok(upvalue_count) = u8::try_from(compiler.upvalues.len()) else {
             self.error_prev("Too many closure variables in function.");
             return 0;
@@ -1197,13 +1199,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Write the byte representing the given opcode into the current compiling chunk.
     fn emit(&mut self, opcode: Opcode) {
         let line = self.token_prev.line;
-        self.compiler_mut(0).fun.chunk.write(opcode, line);
+        self.compilers.last_mut(0).fun.chunk.write(opcode, line);
     }
 
     /// Write the byte into the current compiling chunk.
     fn emit_byte(&mut self, byte: u8) {
         let line = self.token_prev.line;
-        self.compiler_mut(0).fun.chunk.write_byte(byte, line);
+        self.compilers.last_mut(0).fun.chunk.write_byte(byte, line);
     }
 
     /// Emit a jump instruction along with a 16-byte placeholder for the offset.
@@ -1211,14 +1213,16 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit(opcode);
         self.emit_byte(0xff);
         self.emit_byte(0xff);
-        self.compiler(0).fun.chunk.instructions.len() - 2
+        self.compilers.last(0).fun.chunk.instructions.len() - 2
     }
 
     /// Emit a loop instruction along with a 16-byte placeholder for the offset.
     fn emit_loop(&mut self, start: usize) {
         self.emit(Opcode::Loop);
         // We do +2 to adjust for the 2 offset bytes.
-        if let Ok(jump) = u16::try_from(self.compiler(0).fun.chunk.instructions.len() - start + 2) {
+        if let Ok(jump) =
+            u16::try_from(self.compilers.last(0).fun.chunk.instructions.len() - start + 2)
+        {
             let [hi, lo] = jump.to_be_bytes();
             self.emit_byte(hi);
             self.emit_byte(lo);
@@ -1229,7 +1233,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Emit an implicit nil return.
     fn emit_return(&mut self) {
-        if self.compiler(0).fun_type == FunctionType::Initializer {
+        if self.compilers.last(0).fun_type == FunctionType::Initializer {
             // A class initializer should put the instance on top of the stack when finish.
             self.emit(Opcode::GetLocal);
             self.emit_byte(0);
@@ -1250,11 +1254,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn patch_jump(&mut self, offset: usize) {
         // We do -2 to adjust for the 2 offset bytes.
-        if let Ok(jump) = u16::try_from(self.compiler(0).fun.chunk.instructions.len() - offset - 2)
+        if let Ok(jump) =
+            u16::try_from(self.compilers.last(0).fun.chunk.instructions.len() - offset - 2)
         {
             let [hi, lo] = jump.to_be_bytes();
-            self.compiler_mut(0).fun.chunk.instructions[offset] = hi;
-            self.compiler_mut(0).fun.chunk.instructions[offset + 1] = lo;
+            self.compilers.last_mut(0).fun.chunk.instructions[offset] = hi;
+            self.compilers.last_mut(0).fun.chunk.instructions[offset + 1] = lo;
         } else {
             self.error_prev("Too much code to jump over.");
         }
@@ -1262,7 +1267,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     /// Write a constant to the currently compiling chunk.
     fn make_constant(&mut self, value: Value) -> u8 {
-        self.compiler_mut(0)
+        self.compilers
+            .last_mut(0)
             .fun
             .chunk
             .write_constant(value)
@@ -1278,17 +1284,17 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     /// Start a new scope.
     fn begin_scope(&mut self) {
         // Update the current scope.
-        self.compiler_mut(0).scope_depth += 1;
+        self.compilers.last_mut(0).scope_depth += 1;
     }
 
     /// End the current scope
     fn end_scope(&mut self) {
         // Update the current scope.
-        self.compiler_mut(0).scope_depth -= 1;
-        while self.compiler(0).locals.len() > 0 {
-            let local = self.compiler(0).locals.last(0);
+        self.compilers.last_mut(0).scope_depth -= 1;
+        while self.compilers.last(0).locals.len() > 0 {
+            let local = self.compilers.last(0).locals.last(0);
             // End once we reach the current scope.
-            if local.depth <= self.compiler(0).scope_depth {
+            if local.depth <= self.compilers.last(0).scope_depth {
                 break;
             }
             // Variables at the scope bellow get popped out of the stack. If the variable is
@@ -1298,28 +1304,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             } else {
                 self.emit(Opcode::Pop);
             }
-            self.compiler_mut(0).locals.pop();
+            self.compilers.last_mut(0).locals.pop();
         }
-    }
-
-    fn class_compiler(&self, height: usize) -> &ClassCompiler {
-        let index = self.classes.len() - height - 1;
-        unsafe { self.classes.get_unchecked(index) }
-    }
-
-    fn class_compiler_mut(&mut self, height: usize) -> &mut ClassCompiler {
-        let index = self.classes.len() - height - 1;
-        unsafe { self.classes.get_unchecked_mut(index) }
-    }
-
-    fn compiler(&self, height: usize) -> &Compiler<'src> {
-        let index = self.compilers.len() - height - 1;
-        unsafe { self.compilers.get_unchecked(index) }
-    }
-
-    fn compiler_mut(&mut self, height: usize) -> &mut Compiler<'src> {
-        let index = self.compilers.len() - height - 1;
-        unsafe { self.compilers.get_unchecked_mut(index) }
     }
 
     /// Synchronize the parser to a normal state where we can continue parsing
