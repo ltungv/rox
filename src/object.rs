@@ -1,8 +1,6 @@
 use std::{
     cell::Cell,
-    error, fmt,
-    marker::PhantomData,
-    mem,
+    error, fmt, mem,
     ops::{self, BitXor, Deref},
     ptr::NonNull,
 };
@@ -574,14 +572,12 @@ impl<T: GcSized + Copy> GcSized for Cell<T> {
 #[derive(Debug)]
 pub struct Gc<T> {
     ptr: NonNull<GcData<T>>,
-    marker: PhantomData<GcData<T>>,
 }
 
 impl<T> Gc<T> {
     pub fn new(boxed: Box<GcData<T>>) -> Self {
         Self {
             ptr: NonNull::from(Box::leak(boxed)),
-            marker: PhantomData,
         }
     }
 
