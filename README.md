@@ -1,12 +1,13 @@
 # Rox
 
-A feature-complete bytecode virtual machine written in Rust for the Lox programming language. This version performs about 50% worse than the original C-implementation.
+`rox` is a feature-complete bytecode virtual machine written in Rust for the Lox programming language. This version performs about 50% worse than the original C-implementation.
 
 ## Optimizations
 
-+ [x] Caches the chunk instructions pointer. We hold a raw reference into the chunk's list of instructions within our VM.
-+ [x] Custom fixed-sized stack with no bounds checking on access. We hand-roll our own stack implementation that is backed by a fixed-size array.
-+ [x] Custom HashMap using the interned string pointer addresses as its keys. Strings in Lox are hashed upon creation, and the hash value is cached within the string object. Thus, we don't have to recompute the hash when accessing the HashMap.
++ [x] Custom fixed-size dynamic array with no bounds check on access.
++ [x] Custom hash table using the interned string pointer. All strings in `rox` are interned upon creation, giving us two benefits:
+    + Strings don't need to be hashed in our custom hash table.
+    + Strings can be compared by simply comparing the pointers.
 
 ## Implemented challenges
 
