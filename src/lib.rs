@@ -10,6 +10,7 @@
 
 mod chunk;
 mod compile;
+pub mod gc;
 mod heap;
 mod list;
 mod object;
