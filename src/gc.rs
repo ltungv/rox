@@ -4,7 +4,7 @@ mod alloc;
 mod chain;
 mod ptr;
 
-use core::{cell::RefCell, marker::PhantomPinned, pin::Pin};
+use core::{cell::RefCell, marker::PhantomPinned, pin::Pin, ptr::NonNull};
 
 use alloc::Alloc;
 use chain::Chain;
@@ -46,16 +46,17 @@ impl<'root, 'heap> Root<'root, 'heap> {
         println!("Alloc Gc");
         let ptr = GcPointer::new(object);
         self.raw.heap.manage(ptr);
-        self.raw.heap.roots.borrow_mut()[self.raw.id] = Some(ptr);
+        self.raw.heap.roots.borrow_mut()[self.raw.id] = Some(unsafe {
+            NonNull::new_unchecked(ptr.inner.as_ptr() as *mut dyn Traceable<'heap>)
+        });
         Gc::new(ptr)
     }
 
-    fn reroot<'current_root>(
-        self,
-        gc: &Gc<'current_root, Object<'heap>>,
-    ) -> Gc<'root, Object<'heap>> {
+    fn reroot<'current_root, T: Traceable<'heap>>(self, gc: &Gc<'current_root, T>) -> Gc<'root, T> {
         let ptr = gc.ptr;
-        self.raw.heap.roots.borrow_mut()[self.raw.id] = Some(ptr);
+        self.raw.heap.roots.borrow_mut()[self.raw.id] = Some(unsafe {
+            NonNull::new_unchecked(ptr.inner.as_ptr() as *mut dyn Traceable<'heap>)
+        });
         Gc::new(ptr)
     }
 }
@@ -87,13 +88,14 @@ impl<'root, 'heap> RawRoot<'root, 'heap> {
 struct Heap<'heap> {
     _pin: PhantomPinned,
     list: Chain<Alloc<Object<'heap>>>,
-    roots: RefCell<Vec<Option<GcPointer<Object<'heap>>>>>,
+    roots: RefCell<Vec<Option<NonNull<dyn Traceable<'heap>>>>>,
 }
 
 impl<'heap> Heap<'heap> {
     fn collect(self: Pin<&Self>) {
-        for root in self.roots.borrow().iter().flatten() {
-            root.mark();
+        for root in self.roots.borrow().iter().copied().flatten() {
+            let alloc = unsafe { root.as_ref() };
+            alloc.mark();
         }
         for alloc in self.list() {
             if !alloc.is_marked() {
@@ -168,3 +170,14 @@ pub fn example() {
     }
     heap.collect();
 }
+
+// mod exp {
+//     use super::alloc::Alloc;
+//
+//     trait Allocation {
+//         type Out;
+//         fn get(&self) -> &Alloc<Self::Out>;
+//     }
+//
+//     impl<T>
+// }
