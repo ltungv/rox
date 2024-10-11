@@ -54,7 +54,7 @@ impl<'root, 'heap> Root<'root, 'heap> {
         self,
         gc: &Gc<'current_root, Object<'heap>>,
     ) -> Gc<'root, Object<'heap>> {
-        let ptr = gc.raw();
+        let ptr = gc.ptr;
         self.raw.heap.roots.borrow_mut()[self.raw.id] = Some(ptr);
         Gc::new(ptr)
     }
@@ -140,13 +140,13 @@ enum Upvalue<'heap> {
 impl<'heap> Traceable<'heap> for Upvalue<'heap> {
     fn mark(&self) {
         if let Self::Closed(object) = self {
-            object.raw().mark();
+            object.ptr.mark();
         }
     }
 
     fn manage(&self, heap: Pin<&Heap<'heap>>) {
         if let Self::Closed(object) = self {
-            heap.manage(object.raw());
+            heap.manage(object.ptr);
         }
     }
 }

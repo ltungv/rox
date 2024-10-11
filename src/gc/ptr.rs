@@ -4,7 +4,7 @@ use super::{alloc::Alloc, Heap, Traceable};
 
 pub struct Gc<'root, T> {
     _ref: PhantomData<&'root Alloc<T>>,
-    ptr: GcPointer<T>,
+    pub ptr: GcPointer<T>,
 }
 
 impl<'root, T> Gc<'root, T> {
@@ -14,15 +14,11 @@ impl<'root, T> Gc<'root, T> {
             ptr,
         }
     }
-
-    pub const fn raw(&self) -> GcPointer<T> {
-        self.ptr
-    }
 }
 
 pub struct GcEmbed<T> {
     _ref: PhantomData<Alloc<T>>,
-    ptr: GcPointer<T>,
+    pub ptr: GcPointer<T>,
 }
 
 impl<T> Drop for GcEmbed<T> {
@@ -42,25 +38,21 @@ impl<T> GcEmbed<T> {
             ptr: GcPointer::new(data),
         }
     }
-
-    pub const fn raw(&self) -> GcPointer<T> {
-        self.ptr
-    }
 }
 
-pub struct GcPointer<T> {
-    inner: NonNull<Alloc<T>>,
+pub struct GcPointer<T: ?Sized> {
+    pub inner: NonNull<Alloc<T>>,
 }
 
-impl<T> Copy for GcPointer<T> {}
+impl<T: ?Sized> Copy for GcPointer<T> {}
 
-impl<T> Clone for GcPointer<T> {
+impl<T: ?Sized> Clone for GcPointer<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'heap, T: Traceable<'heap>> Traceable<'heap> for GcPointer<T> {
+impl<'heap, T: Traceable<'heap> + ?Sized> Traceable<'heap> for GcPointer<T> {
     fn mark(&self) {
         let alloc = unsafe { self.pin() };
         alloc.mark();
@@ -79,7 +71,9 @@ impl<T> GcPointer<T> {
             inner: unsafe { NonNull::new_unchecked(Box::into_raw(alloc)) },
         }
     }
+}
 
+impl<T: ?Sized> GcPointer<T> {
     pub unsafe fn pin(&self) -> Pin<&Alloc<T>> {
         Pin::new_unchecked(self.inner.as_ref())
     }
