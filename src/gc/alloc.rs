@@ -3,22 +3,24 @@ use std::pin::Pin;
 
 use super::{chain::Chain, Heap, Traceable};
 
-pub struct Alloc<'heap, T: Traceable<'heap>> {
+pub struct Alloc<T> {
     _pin: PhantomPinned,
-    list: Chain<Alloc<'heap, T>>,
+    list: Chain<Alloc<T>>,
     mark: Cell<bool>,
     data: T,
 }
 
-impl<'heap, T: Traceable<'heap>> AsRef<Chain<Self>> for Alloc<'heap, T> {
+impl<T> AsRef<Chain<Self>> for Alloc<T> {
     fn as_ref(&self) -> &Chain<Self> {
         &self.list
     }
 }
 
-impl<'heap, T: Traceable<'heap>> Traceable<'heap> for Alloc<'heap, T> {
+impl<'heap, T: Traceable<'heap>> Traceable<'heap> for Alloc<T> {
     fn mark(&self) {
-        self.mark();
+        if !self.mark.replace(true) {
+            self.data.mark();
+        }
     }
 
     fn manage(&self, heap: Pin<&Heap<'heap>>) {
@@ -26,7 +28,7 @@ impl<'heap, T: Traceable<'heap>> Traceable<'heap> for Alloc<'heap, T> {
     }
 }
 
-impl<'heap, T: Traceable<'heap>> Alloc<'heap, T> {
+impl<T> Alloc<T> {
     pub fn new(data: T) -> Self {
         Self {
             _pin: PhantomPinned,
@@ -39,12 +41,6 @@ impl<'heap, T: Traceable<'heap>> Alloc<'heap, T> {
     pub unsafe fn free(ptr: *mut Self) {
         println!("Freeing {ptr:?}");
         drop(Box::from_raw(ptr));
-    }
-
-    pub fn mark(&self) {
-        if !self.mark.replace(true) {
-            self.data.mark();
-        }
     }
 
     pub fn is_marked(&self) -> bool {

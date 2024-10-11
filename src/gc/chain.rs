@@ -12,7 +12,7 @@ pub struct Chain<T: AsRef<Chain<T>> + ?Sized> {
     next: Cell<Option<NonNull<T>>>,
 }
 
-impl<T: AsRef<Self>> Default for Chain<T> {
+impl<T: AsRef<Self> + ?Sized> Default for Chain<T> {
     fn default() -> Self {
         Self {
             _pin: PhantomPinned,
@@ -35,7 +35,7 @@ impl<T: AsRef<Self> + ?Sized> Drop for Chain<T> {
     }
 }
 
-impl<T: AsRef<Self>> Chain<T> {
+impl<T: AsRef<Self> + ?Sized> Chain<T> {
     pub fn link(self: Pin<&Self>, next: Pin<&mut T>) {
         let list = next.deref().as_ref();
         list.prev.set(Some(NonNull::from(self.get_ref())));
@@ -55,7 +55,7 @@ impl<T: AsRef<Self>> Chain<T> {
     }
 }
 
-impl<'iter, T: AsRef<Chain<T>>> IntoIterator for Pin<&'iter Chain<T>> {
+impl<'iter, T: AsRef<Chain<T>> + ?Sized> IntoIterator for Pin<&'iter Chain<T>> {
     type Item = Pin<&'iter mut T>;
 
     type IntoIter = IterMut<'iter, T>;
@@ -68,12 +68,12 @@ impl<'iter, T: AsRef<Chain<T>>> IntoIterator for Pin<&'iter Chain<T>> {
     }
 }
 
-pub struct IterMut<'iter, T: AsRef<Chain<T>>> {
+pub struct IterMut<'iter, T: AsRef<Chain<T>> + ?Sized> {
     _ref: PhantomData<&'iter mut T>,
     next: Option<NonNull<T>>,
 }
 
-impl<'iter, T: AsRef<Chain<T>>> Iterator for IterMut<'iter, T> {
+impl<'iter, T: AsRef<Chain<T>> + ?Sized> Iterator for IterMut<'iter, T> {
     type Item = Pin<&'iter mut T>;
 
     fn next(&mut self) -> Option<Self::Item> {

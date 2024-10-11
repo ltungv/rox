@@ -42,17 +42,21 @@ impl<'root, 'heap> Root<'root, 'heap> {
         }
     }
 
-    fn enroot(self, object: Object<'heap>) -> Gc<'root, 'heap, Object<'heap>> {
+    fn enroot(self, object: Object<'heap>) -> Gc<'root, Object<'heap>> {
         println!("Alloc Gc");
-        let ptr = GcPointer::new(Alloc::new(object));
+        let ptr = GcPointer::new(object);
         self.raw.heap.manage(ptr);
         self.raw.heap.roots.borrow_mut()[self.raw.id] = Some(ptr);
-        Gc::enroot(ptr)
+        Gc::new(ptr)
     }
 
-    fn reroot<'r>(self, gc: &Gc<'r, 'heap, Object<'heap>>) -> Gc<'root, 'heap, Object<'heap>> {
-        self.raw.heap.roots.borrow_mut()[self.raw.id] = Some(gc.raw());
-        Gc::reroot(gc)
+    fn reroot<'current_root>(
+        self,
+        gc: &Gc<'current_root, Object<'heap>>,
+    ) -> Gc<'root, Object<'heap>> {
+        let ptr = gc.raw();
+        self.raw.heap.roots.borrow_mut()[self.raw.id] = Some(ptr);
+        Gc::new(ptr)
     }
 }
 
@@ -82,8 +86,8 @@ impl<'root, 'heap> RawRoot<'root, 'heap> {
 #[derive(Default)]
 struct Heap<'heap> {
     _pin: PhantomPinned,
-    list: Chain<Alloc<'heap, Object<'heap>>>,
-    roots: RefCell<Vec<Option<GcPointer<'heap, Alloc<'heap, Object<'heap>>>>>>,
+    list: Chain<Alloc<Object<'heap>>>,
+    roots: RefCell<Vec<Option<GcPointer<Object<'heap>>>>>,
 }
 
 impl<'heap> Heap<'heap> {
@@ -100,12 +104,12 @@ impl<'heap> Heap<'heap> {
         }
     }
 
-    fn manage(self: Pin<&Self>, mut ptr: GcPointer<'heap, Alloc<'heap, Object<'heap>>>) {
+    fn manage(self: Pin<&Self>, mut ptr: GcPointer<Object<'heap>>) {
         ptr.manage(self);
         self.list().link(unsafe { ptr.pin_mut() });
     }
 
-    fn list(self: Pin<&Self>) -> Pin<&Chain<Alloc<'heap, Object<'heap>>>> {
+    fn list(self: Pin<&Self>) -> Pin<&Chain<Alloc<Object<'heap>>>> {
         unsafe { self.map_unchecked(|heap| &heap.list) }
     }
 }
@@ -130,7 +134,7 @@ impl<'heap> Traceable<'heap> for Object<'heap> {
 
 enum Upvalue<'heap> {
     Open(usize),
-    Closed(GcEmbed<'heap, Object<'heap>>),
+    Closed(GcEmbed<Object<'heap>>),
 }
 
 impl<'heap> Traceable<'heap> for Upvalue<'heap> {
