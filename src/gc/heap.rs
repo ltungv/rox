@@ -52,7 +52,6 @@ impl<'heap> Heap<'heap> {
     pub(super) fn enroot<'root>(&self, trace: Pin<&'root dyn Trace>) {
         let trace: Pin<&'heap dyn Trace> = unsafe { core::mem::transmute(trace) };
         let ptr = core::ptr::from_ref(trace.get_ref()).cast_mut();
-        // SAFETY: We create `ptr` from a reference which is sure to be non-null.
         let ptr = unsafe { NonNull::new_unchecked(ptr) };
         self.roots.borrow_mut().push(ptr);
     }

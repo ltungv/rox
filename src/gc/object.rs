@@ -22,9 +22,7 @@ impl Trace for Object {
 impl Object {
     pub(super) unsafe fn free(self) {
         match self {
-            Self::Upvalue(gc) => {
-                RawObject::free(gc.ptr.as_ptr());
-            }
+            Self::Upvalue(gc) => gc.free(),
         }
     }
 
@@ -61,15 +59,14 @@ impl Trace for Upvalue {
     }
 }
 
-/// Gc is a pointer managed by the garbage collector. This can't not be dereferenced unless it is
-/// wrapped in [`super::root::Root`]
 #[derive(Debug)]
 pub struct Gc<T> {
     _own: PhantomData<T>,
-    ptr: NonNull<RawObject<T>>,
+    ptr: NonNull<GcBox<T>>,
 }
 
 impl<T> Copy for Gc<T> {}
+
 impl<T> Clone for Gc<T> {
     fn clone(&self) -> Self {
         *self
@@ -88,7 +85,7 @@ impl<T: Trace> Trace for Gc<T> {
 
 impl<T> Gc<T> {
     pub(super) fn new(data: T) -> Self {
-        let raw = Box::new(RawObject::new(data));
+        let raw = Box::new(GcBox::new(data));
         let ptr = Box::into_raw(raw);
         let ptr = unsafe { NonNull::new_unchecked(ptr) };
         println!("Alloc {ptr:?}");
@@ -98,26 +95,31 @@ impl<T> Gc<T> {
         }
     }
 
-    pub(super) const fn get_ptr(self) -> NonNull<RawObject<T>> {
+    pub(super) const fn get_ptr(self) -> NonNull<GcBox<T>> {
         self.ptr
+    }
+
+    unsafe fn free(self) {
+        println!("Freeing {:?}", self.ptr);
+        drop(Box::from_raw(self.ptr.as_ptr()));
     }
 }
 
 #[derive(Debug)]
-pub(super) struct RawObject<T> {
+pub(super) struct GcBox<T> {
     _pin: PhantomPinned,
     next: Cell<Option<Object>>,
     mark: Cell<bool>,
     data: T,
 }
 
-impl<T> AsRef<T> for RawObject<T> {
+impl<T> AsRef<T> for GcBox<T> {
     fn as_ref(&self) -> &T {
         &self.data
     }
 }
 
-impl<T> RawObject<T> {
+impl<T> GcBox<T> {
     const fn new(data: T) -> Self {
         Self {
             _pin: PhantomPinned,
@@ -125,11 +127,6 @@ impl<T> RawObject<T> {
             mark: Cell::new(false),
             data,
         }
-    }
-
-    unsafe fn free(ptr: *mut Self) {
-        println!("Freeing {ptr:?}");
-        drop(Box::from_raw(ptr));
     }
 
     fn mark(&self) -> bool {
