@@ -1,40 +1,24 @@
-use core::{cell::Cell, cell::RefCell, cell::RefMut, marker::PhantomData, ptr::NonNull};
+use core::{cell::Cell, cell::RefCell, pin::Pin, ptr::NonNull};
 
-use super::{alloc::Alloc, Object, Trace};
-
-#[derive(Debug)]
-pub struct Gc<T> {
-    _own: PhantomData<T>,
-    pub(super) ptr: NonNull<Alloc<T>>,
-}
-
-impl<T: Trace> Trace for Gc<T> {
-    fn trace(&self) {
-        let alloc = unsafe { self.ptr.as_ref() };
-        alloc.trace();
-    }
-}
+use super::{
+    object::{Gc, Object},
+    Trace,
+};
 
 #[derive(Default)]
-pub struct Heap {
-    head: Cell<Option<NonNull<Alloc<Object>>>>,
-    roots: RefCell<Vec<NonNull<dyn Trace>>>,
+pub struct Heap<'heap> {
+    head: Cell<Option<Object>>,
+    roots: RefCell<Vec<NonNull<dyn Trace + 'heap>>>,
 }
 
-impl Heap {
-    pub fn alloc(&self, object: Object) -> Gc<Object> {
-        let alloc = Box::new(Alloc::new(object));
-        alloc.set_next(self.head.get());
+impl<'heap> Heap<'heap> {
+    pub fn alloc<T, F: Fn(Gc<T>) -> Object>(&self, data: T, map: F) -> (Gc<T>, Object) {
+        let gc = Gc::new(data);
+        let object = map(gc);
 
-        let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(alloc)) };
-        self.head.set(Some(ptr));
-
-        println!("Alloc {ptr:?}");
-
-        Gc {
-            _own: PhantomData,
-            ptr,
-        }
+        unsafe { object.set_next(self.head.get()) };
+        self.head.set(Some(object));
+        (gc, object)
     }
 
     pub fn collect(&self) {
@@ -45,21 +29,19 @@ impl Heap {
             alloc.trace();
         }
 
-        let mut prev: Option<NonNull<Alloc<Object>>> = None;
+        let mut prev: Option<Object> = None;
         let mut curr = self.head.get();
-        while let Some(mut curr_ptr) = curr {
-            println!("Checking {curr_ptr:?}");
-            let curr_ref = unsafe { curr_ptr.as_mut() };
-            let next = curr_ref.get_next();
-            if curr_ref.is_marked() {
+        while let Some(curr_obj) = curr {
+            println!("Checking {curr_obj:?}");
+            let next = unsafe { curr_obj.get_next() };
+            if unsafe { curr_obj.unmark() } {
                 prev = curr;
                 curr = next;
             } else {
                 curr = next;
-                unsafe { Alloc::free(core::ptr::from_mut(curr_ref)) }
-                if let Some(prev_ptr) = prev {
-                    let prev_ref = unsafe { prev_ptr.as_ref() };
-                    prev_ref.set_next(next);
+                unsafe { curr_obj.free() }
+                if let Some(prev) = prev {
+                    unsafe { prev.set_next(next) };
                 } else {
                     self.head.set(curr);
                 }
@@ -67,7 +49,15 @@ impl Heap {
         }
     }
 
-    pub fn roots_mut(&self) -> RefMut<'_, Vec<NonNull<dyn Trace>>> {
-        self.roots.borrow_mut()
+    pub(super) fn enroot<'root>(&self, trace: Pin<&'root dyn Trace>) {
+        let trace: Pin<&'heap dyn Trace> = unsafe { core::mem::transmute(trace) };
+        let ptr = core::ptr::from_ref(trace.get_ref()).cast_mut();
+        // SAFETY: We create `ptr` from a reference which is sure to be non-null.
+        let ptr = unsafe { NonNull::new_unchecked(ptr) };
+        self.roots.borrow_mut().push(ptr);
+    }
+
+    pub(super) fn uproot(&self) {
+        self.roots.borrow_mut().pop();
     }
 }

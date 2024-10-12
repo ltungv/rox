@@ -1,38 +1,53 @@
-use core::{pin::Pin, ptr::NonNull};
+use core::pin::Pin;
 
-use super::{
-    alloc::Alloc,
-    heap::{Gc, Heap},
-    Trace,
-};
+use super::{heap::Heap, object::Gc, Trace};
 
-pub struct Root<'root, T> {
-    pin: Pin<&'root mut T>,
-    heap: &'root Heap,
+/// Constructs a stack-pinned root.
+macro_rules! root {
+    ($heap:ident, $($root:ident),+) => {$(
+        let $root = $root;
+        let $root = unsafe { $crate::gc::root::Root::new_unchecked(&$root, &$heap) };
+    )*}
 }
 
-impl<'root, T> Drop for Root<'root, T> {
+/// Root holds a reference to a value pinned to the stack. Managed pointers that are transitively
+/// reachable from the roots are not collected.
+pub struct Root<'root, 'heap, T> {
+    pin: Pin<&'root T>,
+    heap: &'root Heap<'heap>,
+}
+
+impl<'root, 'heap, T> Drop for Root<'root, 'heap, T> {
     fn drop(&mut self) {
-        self.heap.roots_mut().pop();
+        self.heap.uproot();
     }
 }
 
-impl<'root, T> core::ops::Deref for Root<'root, Gc<T>> {
+impl<'root, 'heap, T> core::ops::Deref for Root<'root, 'heap, Gc<T>> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        let alloc = unsafe { self.pin.ptr.as_ref() };
-        alloc.as_ref()
+        let ptr = self.pin.get_ptr();
+        // SAFETY:
+        // + We always allocated an object with `Box`, thus it is always aligned and initialized.
+        // + We know that an object won't be garbage collected during `'root`.
+        // + We never hand out unique references to objects.
+        let raw = unsafe { ptr.as_ref() };
+        raw.as_ref()
     }
 }
 
-impl<'root, T: Trace> Root<'root, T> {
-    pub unsafe fn new_unchecked(data: &'root mut T, heap: &'root Heap) -> Self {
-        let mut roots = heap.roots_mut();
-        let ptr = core::ptr::from_mut(data) as *mut dyn Trace;
-        let ptr = unsafe { NonNull::new_unchecked(ptr) };
-        roots.push(ptr);
-        let pin = Pin::new_unchecked(data);
+impl<'root, 'heap, T: Trace> Root<'root, 'heap, T> {
+    /// Enroots a value and ensures all reachable managed pointers live pass a garbage collection.
+    /// To safely ensure that the referenced value is pinned, use the [`root!`] macro.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `data` won't ever be moved once it's given to this method.
+    pub unsafe fn new_unchecked(data: &'root T, heap: &'root Heap<'heap>) -> Self {
+        // SAFETY: We require the caller to ensure that `data` won't ever be moved.
+        let pin = unsafe { Pin::new_unchecked(data) };
+        heap.enroot(pin);
         Self { pin, heap }
     }
 }
