@@ -87,7 +87,7 @@ impl Object {
     }
 
     /// Unmark the object.
-    pub fn unmark(&self) {
+    pub fn unmark(&self) -> bool {
         match self {
             Self::String(s) => s.unmark(),
             Self::Upvalue(v) => v.unmark(),
@@ -101,16 +101,16 @@ impl Object {
     }
 
     /// Return whether the object is marked.
-    pub fn is_marked(&self) -> bool {
+    pub fn marked(&self) -> bool {
         match self {
-            Self::String(s) => s.is_marked(),
-            Self::Upvalue(v) => v.is_marked(),
-            Self::Closure(c) => c.is_marked(),
-            Self::Fun(f) => f.is_marked(),
-            Self::NativeFun(f) => f.is_marked(),
-            Self::Class(c) => c.is_marked(),
-            Self::Instance(i) => i.is_marked(),
-            Self::BoundMethod(m) => m.is_marked(),
+            Self::String(s) => s.marked(),
+            Self::Upvalue(v) => v.marked(),
+            Self::Closure(c) => c.marked(),
+            Self::Fun(f) => f.marked(),
+            Self::NativeFun(f) => f.marked(),
+            Self::Class(c) => c.marked(),
+            Self::Instance(i) => i.marked(),
+            Self::BoundMethod(m) => m.marked(),
         }
     }
 
@@ -512,16 +512,16 @@ pub trait GcSized {
 
 #[derive(Debug)]
 pub struct GcData<T> {
-    marked: Cell<bool>,
     next: Cell<Option<Object>>,
+    mark: Cell<bool>,
     data: T,
 }
 
 impl<T> GcData<T> {
     pub const fn new(next: Option<Object>, data: T) -> Self {
         Self {
-            marked: Cell::new(false),
             next: Cell::new(next),
+            mark: Cell::new(false),
             data,
         }
     }
@@ -534,20 +534,16 @@ impl<T> GcData<T> {
         self.next.set(next);
     }
 
-    pub fn is_marked(&self) -> bool {
-        self.marked.get()
-    }
-
     pub fn mark(&self) -> bool {
-        let is_not_marked = !self.marked.get();
-        if is_not_marked {
-            self.marked.set(true);
-        }
-        is_not_marked
+        self.mark.replace(true)
     }
 
-    pub fn unmark(&self) {
-        self.marked.set(false);
+    pub fn unmark(&self) -> bool {
+        self.mark.replace(false)
+    }
+
+    pub fn marked(&self) -> bool {
+        self.mark.get()
     }
 }
 
@@ -559,7 +555,7 @@ impl<T> AsRef<T> for GcData<T> {
 
 impl<T: GcSized> GcSized for GcData<T> {
     fn size(&self) -> usize {
-        mem::size_of_val(&self.next) + mem::size_of_val(&self.marked) + self.data.size()
+        mem::size_of_val(&self.next) + mem::size_of_val(&self.mark) + self.data.size()
     }
 }
 

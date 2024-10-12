@@ -97,7 +97,7 @@ impl Heap {
 
         let mut dangling_strings = Vec::with_capacity(self.strings.len());
         for (&k, ()) in &self.strings {
-            if !k.is_marked() {
+            if !k.marked() {
                 dangling_strings.push(k);
             }
         }
@@ -107,8 +107,7 @@ impl Heap {
 
         while let Some(curr_ref) = curr_obj {
             let next = curr_ref.get_next();
-            if curr_ref.is_marked() {
-                curr_ref.unmark();
+            if curr_ref.unmark() {
                 prev_obj = curr_obj;
                 curr_obj = next;
             } else {
