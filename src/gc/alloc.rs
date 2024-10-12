@@ -1,44 +1,39 @@
-use core::{cell::Cell, marker::PhantomPinned, pin::Pin};
+use core::{cell::Cell, marker::PhantomPinned, ptr::NonNull};
 
-use super::{chain::Chain, Heap, Traceable};
+use super::Trace;
 
-pub struct Alloc<T: ?Sized> {
+pub struct Alloc<T> {
     _pin: PhantomPinned,
-    list: Chain<Alloc<T>>,
+    next: Cell<Option<NonNull<Self>>>,
     mark: Cell<bool>,
     data: T,
 }
 
-impl<T: ?Sized> AsRef<Chain<Self>> for Alloc<T> {
-    fn as_ref(&self) -> &Chain<Self> {
-        &self.list
+impl<T> AsRef<T> for Alloc<T> {
+    fn as_ref(&self) -> &T {
+        &self.data
     }
 }
 
-impl<'heap, T: Traceable<'heap> + ?Sized> Traceable<'heap> for Alloc<T> {
-    fn mark(&self) {
+impl<T: Trace> Trace for Alloc<T> {
+    fn trace(&self) {
         if !self.mark.replace(true) {
-            self.data.mark();
+            println!("Mark {:?}", core::ptr::from_ref(self));
+            self.data.trace();
         }
-    }
-
-    fn manage(&self, heap: Pin<&Heap<'heap>>) {
-        self.data.manage(heap);
     }
 }
 
 impl<T> Alloc<T> {
-    pub fn new(data: T) -> Self {
+    pub const fn new(data: T) -> Self {
         Self {
             _pin: PhantomPinned,
-            list: Chain::default(),
+            next: Cell::new(None),
             mark: Cell::new(false),
             data,
         }
     }
-}
 
-impl<T: ?Sized> Alloc<T> {
     pub unsafe fn free(ptr: *mut Self) {
         println!("Freeing {ptr:?}");
         drop(Box::from_raw(ptr));
@@ -48,7 +43,11 @@ impl<T: ?Sized> Alloc<T> {
         self.mark.replace(false)
     }
 
-    pub fn is_unmanaged(&self) -> bool {
-        self.list.is_head()
+    pub fn get_next(&self) -> Option<NonNull<Self>> {
+        self.next.get()
+    }
+
+    pub fn set_next(&self, next: Option<NonNull<Self>>) {
+        self.next.set(next);
     }
 }
