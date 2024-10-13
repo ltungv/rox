@@ -17,7 +17,7 @@ fn main() {
             rox::gc::object::Upvalue::Open(0),
             heap.as_ref(),
         )));
-        root.enroot(upvalue.as_ref());
+        let _upvalue = root.enroot(upvalue.as_ref());
 
         heap.as_ref().collect();
     }

@@ -2,7 +2,8 @@ use std::{cell::Cell, marker::PhantomPinned};
 
 use super::{link::Link, Trace};
 
-pub(super) struct Alloc<'heap, T: ?Sized> {
+#[derive(Debug)]
+pub struct Alloc<'heap, T: ?Sized> {
     _pin: PhantomPinned,
     link: Link<Alloc<'heap, dyn Trace + 'heap>>,
     mark: Cell<bool>,

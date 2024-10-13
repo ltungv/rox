@@ -1,9 +1,17 @@
 use std::{cell::Cell, marker::PhantomData, pin::Pin, ptr::NonNull};
 
-#[derive(Debug)]
 pub(super) struct Link<T: ?Sized + AsRef<Self>> {
     prev: Cell<Option<NonNull<Self>>>,
     next: Cell<Option<NonNull<T>>>,
+}
+
+impl<T: ?Sized + AsRef<Self>> std::fmt::Debug for Link<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Link")
+            .field("prev", &self.prev.get().map(NonNull::as_ptr))
+            .field("next", &self.next.get().map(NonNull::as_ptr))
+            .finish()
+    }
 }
 
 impl<T: ?Sized + AsRef<Self>> Default for Link<T> {

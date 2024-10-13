@@ -44,23 +44,33 @@ pub unsafe trait Trace {
 /// is (transitively) rooted on the stack.
 #[allow(clippy::module_name_repetitions)]
 #[derive(Debug)]
-pub struct GcBox<'root, 'heap, T: ?Sized> {
-    _ref: PhantomData<&'root Alloc<'heap, T>>,
-    raw: GcRaw<'heap, T>,
+pub struct Gc<'root, T: ?Sized> {
+    _ref: PhantomData<&'root T>,
+    ptr: NonNull<T>,
 }
 
-impl<'root, 'heap, T: ?Sized> From<GcRaw<'heap, T>> for GcBox<'root, 'heap, T> {
+impl<'root, 'heap, T: ?Sized> From<GcRaw<'heap, T>> for Gc<'root, Alloc<'heap, T>> {
     fn from(raw: GcRaw<'heap, T>) -> Self {
         Self {
             _ref: PhantomData,
-            raw,
+            ptr: raw.ptr,
         }
     }
 }
 
-unsafe impl<'root, 'heap, T: ?Sized + Trace> Trace for GcBox<'root, 'heap, T> {
+impl<'root, T: ?Sized> From<Pin<&T>> for Gc<'root, T> {
+    fn from(pin: Pin<&T>) -> Self {
+        Self {
+            _ref: PhantomData,
+            ptr: NonNull::from(pin.get_ref()),
+        }
+    }
+}
+
+unsafe impl<'root, T: ?Sized + Trace> Trace for Gc<'root, T> {
     fn trace(&self) {
-        self.raw.trace();
+        let data = unsafe { self.ptr.as_ref() };
+        data.trace();
     }
 }
 
@@ -71,7 +81,7 @@ unsafe impl<'root, 'heap, T: ?Sized + Trace> Trace for GcBox<'root, 'heap, T> {
 #[allow(clippy::module_name_repetitions)]
 #[derive(Debug)]
 pub struct GcRef<'root, 'heap, T: ?Sized> {
-    _ref: PhantomData<&'root Alloc<'heap, T>>,
+    _ref: PhantomData<&'root T>,
     raw: GcRaw<'heap, T>,
 }
 
