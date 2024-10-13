@@ -1,6 +1,6 @@
 use std::pin::Pin;
 
-use super::{alloc::Alloc, heap::Heap, Gc, Trace};
+use super::{heap::Heap, Gc, Trace};
 
 /// [`StackRoot`] represents a value rooted on the stack from which the garbage collector can start
 /// tracing. Pointers transitively reachable from rooted values are not collected and will live
@@ -27,11 +27,13 @@ impl<'pin, 'root, 'heap> StackRoot<'pin, 'root, 'heap> {
     }
 
     /// Allocates a value managed by the garbage collector and enroots it.
-    pub fn alloc<T: Trace + 'heap>(self, data: T) -> Gc<'root, Alloc<'heap, T>> {
+    #[must_use]
+    pub fn alloc<T: Trace + 'heap>(self, data: T) -> Gc<'root, T> {
         self.root.as_ref().alloc(data)
     }
 
     /// Enroots a stack value.
+    #[must_use]
     pub fn enroot<T: Trace + 'heap>(self, data: Pin<&T>) -> Gc<'root, T> {
         self.root.as_ref().enroot(data)
     }
@@ -63,7 +65,7 @@ impl<'root, 'heap> Root<'root, 'heap> {
         Self { id, heap }
     }
 
-    fn alloc<'pin, T: Trace + 'heap>(self: Pin<&'pin Self>, data: T) -> Gc<'root, Alloc<'heap, T>> {
+    fn alloc<'pin, T: Trace + 'heap>(self: Pin<&'pin Self>, data: T) -> Gc<'root, T> {
         let raw = self.heap.alloc(data);
         self.heap.set_root(self.id, raw.pin());
         Gc::from(raw)
