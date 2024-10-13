@@ -1,62 +1,64 @@
-use core::{cell::Cell, cell::RefCell, pin::Pin, ptr::NonNull};
+use std::{cell::RefCell, pin::Pin, ptr::NonNull};
 
-use super::{
-    object::{Gc, Object},
-    Trace,
-};
+use super::{alloc::Alloc, link::Link, GcRaw, Trace};
 
+/// [`Heap`] holds pointers to all values that can be garbage collected.
 #[derive(Default)]
 pub struct Heap<'heap> {
-    head: Cell<Option<Object>>,
-    roots: RefCell<Vec<NonNull<dyn Trace + 'heap>>>,
+    link: Link<Alloc<'heap, dyn Trace + 'heap>>,
+    roots: RefCell<Vec<Option<NonNull<dyn Trace + 'heap>>>>,
+}
+
+impl<'heap> std::fmt::Debug for Heap<'heap> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Heap").finish()
+    }
 }
 
 impl<'heap> Heap<'heap> {
-    pub fn alloc<T, F: Fn(Gc<T>) -> Object>(&self, data: T, map: F) -> (Gc<T>, Object) {
-        let gc = Gc::new(data);
-        let object = map(gc);
-
-        unsafe { object.set_next(self.head.get()) };
-        self.head.set(Some(object));
-        (gc, object)
-    }
-
-    pub fn collect(&self) {
+    /// Deallocates every values that are no longer reachable.
+    pub fn collect(self: Pin<&Self>) {
         println!("Collect");
-        let roots = self.roots.borrow();
-        for root in roots.iter() {
-            let alloc = unsafe { root.as_ref() };
-            alloc.trace();
+        for root in self.roots.borrow().iter().flatten() {
+            let root = unsafe { root.as_ref() };
+            root.trace();
         }
-
-        let mut prev: Option<Object> = None;
-        let mut curr = self.head.get();
-        while let Some(curr_obj) = curr {
-            println!("Checking {curr_obj:?}");
-            let next = unsafe { curr_obj.get_next() };
-            if unsafe { curr_obj.unmark() } {
-                prev = curr;
-                curr = next;
+        for alloc in self.link().iter_mut() {
+            if alloc.marked() {
+                alloc.unmark();
             } else {
-                curr = next;
-                unsafe { curr_obj.free() }
-                if let Some(prev) = prev {
-                    unsafe { prev.set_next(next) };
-                } else {
-                    self.head.set(curr);
-                }
+                println!("Free {alloc:p}");
+                let alloc = unsafe { alloc.get_unchecked_mut() };
+                let alloc = unsafe { Box::from_raw(std::ptr::from_mut(alloc)) };
+                drop(alloc);
             }
         }
     }
 
-    pub(super) fn enroot<'root>(&self, trace: Pin<&'root dyn Trace>) {
-        let trace: Pin<&'heap dyn Trace> = unsafe { core::mem::transmute(trace) };
-        let ptr = core::ptr::from_ref(trace.get_ref()).cast_mut();
-        let ptr = unsafe { NonNull::new_unchecked(ptr) };
-        self.roots.borrow_mut().push(ptr);
+    pub(super) fn alloc<T: Trace + 'heap>(self: Pin<&Self>, data: T) -> GcRaw<'heap, T> {
+        let raw = GcRaw::new(data);
+        println!("Alloc {:p}", raw.ptr);
+        self.link().insert(raw.unsize().pin_mut());
+        raw
     }
 
-    pub(super) fn uproot(&self) {
+    pub(super) fn add_root(self: Pin<&Self>) -> usize {
+        let mut roots = self.roots.borrow_mut();
+        let id = roots.len();
+        roots.push(None);
+        id
+    }
+
+    pub(super) fn pop_root(self: Pin<&Self>) {
         self.roots.borrow_mut().pop();
+    }
+
+    pub(super) fn set_root<T: Trace + 'heap>(self: Pin<&Self>, id: usize, pin: Pin<&T>) {
+        let trace = pin.get_ref() as &(dyn Trace + 'heap);
+        self.roots.borrow_mut()[id] = Some(NonNull::from(trace));
+    }
+
+    fn link(self: Pin<&Self>) -> Pin<&Link<Alloc<'heap, dyn Trace + 'heap>>> {
+        unsafe { self.map_unchecked(|heap| &heap.link) }
     }
 }
