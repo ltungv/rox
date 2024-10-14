@@ -57,6 +57,13 @@ impl<'root, T: ?Sized> From<Pin<&T>> for Gc<'root, T> {
         }
     }
 }
+impl<'root, T: ?Sized> std::ops::Deref for Gc<'root, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.ptr.as_ref() }
+    }
+}
 
 unsafe impl<'root, T: ?Sized + Trace> Trace for Gc<'root, T> {
     fn trace(&self) {
