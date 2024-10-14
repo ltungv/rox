@@ -10,7 +10,7 @@ mod root;
 pub use heap::Heap;
 pub use root::{Root, StackRoot};
 
-use std::{marker::PhantomData, pin::Pin, ptr::NonNull};
+use std::{cell::Cell, marker::PhantomData, pin::Pin, ptr::NonNull};
 
 use alloc::Alloc;
 
@@ -37,12 +37,17 @@ pub unsafe trait Trace {
     fn trace(&self);
 }
 
+unsafe impl<T: Copy + Trace> Trace for Cell<T> {
+    fn trace(&self) {
+        self.get().trace();
+    }
+}
+
 /// [`Gc`] holds a pointer to a rooted value that is pinned on the stack or allocated on the
 /// managed heap. The held pointer and every managed pointers reachable from it are proven to be
 /// valid pass garbage collections. As a result, they can be safely dereferenced. The pointers'
 /// validity is ensured by the `'root` lifetime which proves that the pointee is (transitively)
 /// reachable from some value on the stack.
-#[allow(clippy::module_name_repetitions)]
 #[derive(Debug)]
 pub struct Gc<'root, T: ?Sized> {
     _ref: PhantomData<&'root T>,
@@ -90,56 +95,55 @@ impl<'heap, T: ?Sized> Gc<'heap, T> {
 /// value nested nested inside another managed value to prevent pointers from being incorrectly
 /// proven valid. In order to safely dereference the pointer, we must create a [`Gc`] from
 /// [`GcBox`] by going through a [`Gc`] of the value in which the [`GcBox`] is nested.
-#[allow(clippy::module_name_repetitions)]
 #[derive(Debug)]
-pub struct GcBox<'heap, T: ?Sized> {
+pub struct Ptr<'heap, T: ?Sized> {
     _own: PhantomData<Alloc<'heap, T>>,
-    ptr: NonNull<Alloc<'heap, T>>,
+    inner: NonNull<Alloc<'heap, T>>,
 }
 
-impl<'heap, T: ?Sized> Copy for GcBox<'heap, T> {}
-impl<'heap, T: ?Sized> Clone for GcBox<'heap, T> {
+impl<'heap, T: ?Sized> Copy for Ptr<'heap, T> {}
+impl<'heap, T: ?Sized> Clone for Ptr<'heap, T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-unsafe impl<'heap, T: ?Sized + Trace> Trace for GcBox<'heap, T> {
+unsafe impl<'heap, T: ?Sized + Trace> Trace for Ptr<'heap, T> {
     fn trace(&self) {
         self.pin().trace();
     }
 }
 
-impl<'heap, T: Trace + 'heap> GcBox<'heap, T> {
-    fn unsize(self) -> GcBox<'heap, dyn Trace + 'heap> {
-        let ptr = self.ptr.as_ptr() as *mut Alloc<'heap, dyn Trace + 'heap>;
-        GcBox {
+impl<'heap, T: Trace + 'heap> Ptr<'heap, T> {
+    fn unsize(self) -> Ptr<'heap, dyn Trace + 'heap> {
+        let ptr = self.inner.as_ptr() as *mut Alloc<'heap, dyn Trace + 'heap>;
+        Ptr {
             _own: PhantomData,
-            ptr: unsafe { NonNull::new_unchecked(ptr) },
+            inner: unsafe { NonNull::new_unchecked(ptr) },
         }
     }
 }
 
-impl<'heap, T: ?Sized> GcBox<'heap, T> {
+impl<'heap, T: ?Sized> Ptr<'heap, T> {
     /// Returns a shared pinned reference to the managed value.
     #[must_use]
     fn pin<'pin>(self) -> Pin<&'pin Alloc<'heap, T>> {
-        unsafe { Pin::new_unchecked(self.ptr.as_ref()) }
+        unsafe { Pin::new_unchecked(self.inner.as_ref()) }
     }
 
     /// Returns a mutable pinned reference to the managed value.
     #[must_use]
     fn pin_mut<'pin>(mut self) -> Pin<&'pin mut Alloc<'heap, T>> {
-        unsafe { Pin::new_unchecked(self.ptr.as_mut()) }
+        unsafe { Pin::new_unchecked(self.inner.as_mut()) }
     }
 }
 
-impl<'heap, T> GcBox<'heap, T> {
+impl<'heap, T> Ptr<'heap, T> {
     fn new(data: T) -> Self {
         let ptr = Box::into_raw(Box::new(Alloc::new(data)));
         Self {
             _own: PhantomData,
-            ptr: unsafe { NonNull::new_unchecked(ptr) },
+            inner: unsafe { NonNull::new_unchecked(ptr) },
         }
     }
 }
