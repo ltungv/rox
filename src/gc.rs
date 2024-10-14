@@ -49,15 +49,6 @@ pub struct Gc<'root, T: ?Sized> {
     ptr: NonNull<T>,
 }
 
-impl<'root, 'heap, T: ?Sized> From<GcRaw<'heap, T>> for Gc<'root, Alloc<'heap, T>> {
-    fn from(raw: GcRaw<'heap, T>) -> Self {
-        Self {
-            _ref: PhantomData,
-            ptr: raw.ptr,
-        }
-    }
-}
-
 impl<'root, T: ?Sized> From<Pin<&T>> for Gc<'root, T> {
     fn from(pin: Pin<&T>) -> Self {
         Self {
@@ -85,11 +76,11 @@ pub struct GcRef<'root, 'heap, T: ?Sized> {
     raw: GcRaw<'heap, T>,
 }
 
-impl<'root, 'heap, T: ?Sized> From<GcRaw<'heap, T>> for GcRef<'root, 'heap, T> {
-    fn from(raw: GcRaw<'heap, T>) -> Self {
+impl<'root, 'heap, T: ?Sized> From<Pin<&Alloc<'heap, T>>> for GcRef<'root, 'heap, T> {
+    fn from(pin: Pin<&Alloc<'heap, T>>) -> Self {
         Self {
             _ref: PhantomData,
-            raw,
+            raw: GcRaw::from(pin),
         }
     }
 }
@@ -121,11 +112,11 @@ impl<'heap, T: ?Sized> Clone for GcRaw<'heap, T> {
     }
 }
 
-impl<'heap, T: ?Sized> From<NonNull<Alloc<'heap, T>>> for GcRaw<'heap, T> {
-    fn from(ptr: NonNull<Alloc<'heap, T>>) -> Self {
+impl<'heap, T: ?Sized> From<Pin<&Alloc<'heap, T>>> for GcRaw<'heap, T> {
+    fn from(pin: Pin<&Alloc<'heap, T>>) -> Self {
         Self {
             _own: PhantomData,
-            ptr,
+            ptr: NonNull::from(pin.get_ref()),
         }
     }
 }
@@ -160,7 +151,9 @@ impl<'heap, T: ?Sized> GcRaw<'heap, T> {
 impl<'heap, T> GcRaw<'heap, T> {
     fn new(data: T) -> Self {
         let ptr = Box::into_raw(Box::new(Alloc::new(data)));
-        let ptr = unsafe { NonNull::new_unchecked(ptr) };
-        Self::from(ptr)
+        Self {
+            _own: PhantomData,
+            ptr: unsafe { NonNull::new_unchecked(ptr) },
+        }
     }
 }

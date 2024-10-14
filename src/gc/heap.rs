@@ -35,11 +35,11 @@ impl<'heap> Heap<'heap> {
         }
     }
 
-    pub(super) fn alloc<T: Trace + 'heap>(self: Pin<&Self>, data: T) -> GcRaw<'heap, T> {
+    pub(super) fn alloc<T: Trace + 'heap>(self: Pin<&Self>, data: T) -> Pin<&Alloc<'heap, T>> {
         let raw = GcRaw::new(data);
         println!("Alloc {:p}", raw.ptr);
         self.link().insert(raw.unsize().pin_mut());
-        raw
+        raw.pin()
     }
 
     pub(super) fn add_root(self: Pin<&Self>) -> usize {

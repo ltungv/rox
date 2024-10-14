@@ -27,11 +27,13 @@ impl<'pin, 'root, 'heap> StackRoot<'pin, 'root, 'heap> {
     }
 
     /// Allocates a value managed by the garbage collector and enroots it.
+    #[must_use]
     pub fn alloc<T: Trace + 'heap>(self, data: T) -> Gc<'root, Alloc<'heap, T>> {
         self.root.as_ref().alloc(data)
     }
 
     /// Enroots a stack value.
+    #[must_use]
     pub fn enroot<T: Trace + 'heap>(self, data: Pin<&T>) -> Gc<'root, T> {
         self.root.as_ref().enroot(data)
     }
@@ -64,9 +66,9 @@ impl<'root, 'heap> Root<'root, 'heap> {
     }
 
     fn alloc<'pin, T: Trace + 'heap>(self: Pin<&'pin Self>, data: T) -> Gc<'root, Alloc<'heap, T>> {
-        let raw = self.heap.alloc(data);
-        self.heap.set_root(self.id, raw.pin());
-        Gc::from(raw)
+        let pin = self.heap.alloc(data);
+        self.heap.set_root(self.id, pin);
+        Gc::from(pin)
     }
 
     fn enroot<'pin, T: Trace + 'heap>(self: Pin<&'pin Self>, pin: Pin<&T>) -> Gc<'root, T> {
