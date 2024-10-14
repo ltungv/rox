@@ -3,11 +3,11 @@
 use super::{GcBox, Trace};
 
 #[derive(Debug)]
-pub enum Object<'root, 'heap> {
-    Upvalue(GcBox<'root, 'heap, Upvalue<'root, 'heap>>),
+pub enum Object<'heap> {
+    Upvalue(GcBox<'heap, Upvalue<'heap>>),
 }
 
-unsafe impl<'root, 'heap> Trace for Object<'root, 'heap> {
+unsafe impl<'heap> Trace for Object<'heap> {
     fn trace(&self) {
         match self {
             Self::Upvalue(v) => v.trace(),
@@ -16,12 +16,12 @@ unsafe impl<'root, 'heap> Trace for Object<'root, 'heap> {
 }
 
 #[derive(Debug)]
-pub enum Upvalue<'root, 'heap> {
+pub enum Upvalue<'heap> {
     Open(usize),
-    Close(Object<'root, 'heap>),
+    Close(Object<'heap>),
 }
 
-unsafe impl<'root, 'heap> Trace for Upvalue<'root, 'heap> {
+unsafe impl<'heap> Trace for Upvalue<'heap> {
     fn trace(&self) {
         if let Self::Close(o) = self {
             o.trace();

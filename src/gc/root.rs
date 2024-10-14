@@ -66,7 +66,7 @@ impl<'root, 'heap> Root<'root, 'heap> {
     }
 
     fn alloc<'pin, T: Trace + 'heap>(self: Pin<&'pin Self>, data: T) -> Gc<'root, Alloc<'heap, T>> {
-        let pin = self.heap.alloc(data);
+        let pin = self.heap.alloc(data).pin();
         self.heap.set_root(self.id, pin);
         Gc::from(pin)
     }

@@ -1,6 +1,6 @@
 use std::{cell::RefCell, pin::Pin, ptr::NonNull};
 
-use super::{alloc::Alloc, link::Link, GcRaw, Trace};
+use super::{alloc::Alloc, link::Link, GcBox, Trace};
 
 /// [`Heap`] holds pointers to all values that can be garbage collected.
 #[derive(Default)]
@@ -35,11 +35,12 @@ impl<'heap> Heap<'heap> {
         }
     }
 
-    pub(super) fn alloc<T: Trace + 'heap>(self: Pin<&Self>, data: T) -> Pin<&Alloc<'heap, T>> {
-        let raw = GcRaw::new(data);
+    /// Allocates a new managed value and return its pointer.
+    pub fn alloc<T: Trace + 'heap>(self: Pin<&Self>, data: T) -> GcBox<'heap, T> {
+        let raw = GcBox::new(data);
         println!("Alloc {:p}", raw.ptr);
         self.link().insert(raw.unsize().pin_mut());
-        raw.pin()
+        raw
     }
 
     pub(super) fn add_root(self: Pin<&Self>) -> usize {
