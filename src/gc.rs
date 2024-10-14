@@ -23,25 +23,25 @@ macro_rules! enroot {
     )*};
 }
 
-/// [`Trace`] is implemented by types containing pointers to values managed by the garbage
-/// collector. Pointers remain valid after a garbage collection if they are reachable through
-/// tracing.
+/// [`Trace`] is implemented by types referencing values allocated on the managed heap. Types that
+/// implement this trait are not necessarily allocated on the managed heap. The value itself or
+/// values contained within it remain valid after garbage collections once they are traced.
 ///
 /// # Safety
 ///
-/// The implementor must make sure that every garbage collected pointers are properly traced.
-/// Otherwise, incorrect trace can result in dangling pointers when the values are used after
-/// garbage collections.
+/// The implementor must make sure that every reachable managed values are properly traced.
+/// Otherwise, incorrect implementation can result in dangling pointers.
 pub unsafe trait Trace {
-    /// Collects the set of reachable garbage collected pointers starting from `&self` either by
-    /// marking the pointers or other strategies.
+    /// Collects the set of reachable values starting from `&self` either by marking them or by
+    /// other strategies.
     fn trace(&self);
 }
 
-/// [`GcBox`] holds a pointer to a value managed by the garbage collector that is proven to not be
-/// collected after garbage collections. As a result, the pointer behind [`GcBox`] can be safely
-/// dereferenced. The pointer's validity is ensured by `'root` lifetime which proves that the value
-/// is (transitively) rooted on the stack.
+/// [`Gc`] holds a pointer to a rooted value that is pinned on the stack or allocated on the
+/// managed heap. The held pointer and every managed pointers reachable from it are proven to be
+/// valid pass garbage collections. As a result, they can be safely dereferenced. The pointers'
+/// validity is ensured by the `'root` lifetime which proves that the pointee is (transitively)
+/// reachable from some value on the stack.
 #[allow(clippy::module_name_repetitions)]
 #[derive(Debug)]
 pub struct Gc<'root, T: ?Sized> {
@@ -72,18 +72,19 @@ unsafe impl<'root, T: ?Sized + Trace> Trace for Gc<'root, T> {
     }
 }
 
-/// [`GcRef`] holds a pointer to a value managed by the garbage collector that can be proven to not
-/// be collected after garbage collection. This is used for managed value nested inside another
-/// managed value. [`GcRef`] is proven to not be collected by creating a [`GcBox`] to the nested
-/// value through a [`GcBox`] of its container.
+/// [`GcBox`] holds a pointer to a value allocated on the stack. There is no guarantee that the
+/// pointee remains valid pass garbage collections. This is used, instead of [`Gc`], for managed
+/// value nested nested inside another managed value to prevent pointers from being incorrectly
+/// proven valid. In order to safely dereference the pointer, we must create a [`Gc`] from
+/// [`GcBox`] by going through a [`Gc`] of the value in which the [`GcBox`] is nested.
 #[allow(clippy::module_name_repetitions)]
 #[derive(Debug)]
-pub struct GcRef<'root, 'heap, T: ?Sized> {
+pub struct GcBox<'root, 'heap, T: ?Sized> {
     _ref: PhantomData<&'root T>,
     raw: GcRaw<'heap, T>,
 }
 
-impl<'root, 'heap, T: ?Sized> From<Pin<&Alloc<'heap, T>>> for GcRef<'root, 'heap, T> {
+impl<'root, 'heap, T: ?Sized> From<Pin<&Alloc<'heap, T>>> for GcBox<'root, 'heap, T> {
     fn from(pin: Pin<&Alloc<'heap, T>>) -> Self {
         Self {
             _ref: PhantomData,
@@ -92,17 +93,17 @@ impl<'root, 'heap, T: ?Sized> From<Pin<&Alloc<'heap, T>>> for GcRef<'root, 'heap
     }
 }
 
-unsafe impl<'root, 'heap, T: ?Sized + Trace> Trace for GcRef<'root, 'heap, T> {
+unsafe impl<'root, 'heap, T: ?Sized + Trace> Trace for GcBox<'root, 'heap, T> {
     fn trace(&self) {
         self.raw.trace();
     }
 }
 
-impl<'root, 'heap, T: Trace + 'heap> GcRef<'root, 'heap, T> {
+impl<'root, 'heap, T: Trace + 'heap> GcBox<'root, 'heap, T> {
     /// Allocates a new value managed by the garbage collector that is not yet rooted.
     pub fn new(data: T, heap: Pin<&Heap<'heap>>) -> Self {
         let raw = heap.alloc(data);
-        GcRef::from(raw)
+        GcBox::from(raw)
     }
 }
 

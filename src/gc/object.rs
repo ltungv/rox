@@ -1,10 +1,10 @@
 #![allow(missing_docs)]
 
-use super::{GcRef, Trace};
+use super::{GcBox, Trace};
 
 #[derive(Debug)]
 pub enum Object<'root, 'heap> {
-    Upvalue(GcRef<'root, 'heap, Upvalue<'root, 'heap>>),
+    Upvalue(GcBox<'root, 'heap, Upvalue<'root, 'heap>>),
 }
 
 unsafe impl<'root, 'heap> Trace for Object<'root, 'heap> {
