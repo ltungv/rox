@@ -7,12 +7,13 @@ mod heap;
 mod link;
 mod root;
 
+pub use alloc::Alloc;
 pub use heap::Heap;
 pub use root::{Root, StackRoot};
 
 use std::{cell::Cell, marker::PhantomData, pin::Pin, ptr::NonNull};
 
-use alloc::Alloc;
+use crate::list::List;
 
 /// [`enroot`] creates a stack-pinned root.
 #[macro_export]
@@ -35,6 +36,26 @@ pub unsafe trait Trace {
     /// Collects the set of reachable values starting from `&self` either by marking them or by
     /// other strategies.
     fn trace(&self);
+}
+
+unsafe impl<T: Trace> Trace for Vec<T> {
+    fn trace(&self) {
+        self.iter().for_each(Trace::trace);
+    }
+}
+
+unsafe impl<T: Trace, const N: usize> Trace for List<T, N> {
+    fn trace(&self) {
+        self.iter().for_each(Trace::trace);
+    }
+}
+
+unsafe impl<T: Copy + Trace> Trace for Option<T> {
+    fn trace(&self) {
+        if let Some(v) = self {
+            v.trace();
+        }
+    }
 }
 
 unsafe impl<T: Copy + Trace> Trace for Cell<T> {
@@ -62,6 +83,7 @@ impl<'root, T: ?Sized> From<Pin<&T>> for Gc<'root, T> {
         }
     }
 }
+
 impl<'root, T: ?Sized> std::ops::Deref for Gc<'root, T> {
     type Target = T;
 

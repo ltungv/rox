@@ -2,6 +2,7 @@ use std::{cell::Cell, marker::PhantomPinned};
 
 use super::{link::Link, Trace};
 
+/// [`Alloc`] is a node in the link list of allocated managed data.
 #[derive(Debug)]
 pub struct Alloc<'heap, T: ?Sized> {
     _pin: PhantomPinned,
