@@ -38,8 +38,11 @@ impl<'heap> Heap<'heap> {
     /// Allocates a new managed value and return its pointer.
     pub fn alloc<T: Trace + 'heap>(self: Pin<&Self>, data: T) -> Ptr<'heap, T> {
         let raw = Ptr::new(data);
-        println!("Alloc {:p}", raw.inner);
-        self.link().insert(raw.unsize().pin_mut());
+        println!("Alloc {:?}", raw.inner);
+        // SAFETY: Call to `pin_mut` is safe because we just allocated the data behind `raw` and
+        // the pointer can't be dangling before garbage collection.
+        let pin = unsafe { raw.unsize().pin_mut() };
+        self.link().insert(pin);
         raw
     }
 

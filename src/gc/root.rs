@@ -66,9 +66,10 @@ impl<'root, 'heap> Root<'root, 'heap> {
     }
 
     fn alloc<'pin, T: Trace + 'heap>(self: Pin<&'pin Self>, data: T) -> Gc<'root, Alloc<'heap, T>> {
-        let pin = self.heap.alloc(data).pin();
-        self.heap.set_root(self.id, pin);
-        Gc::from(pin)
+        // SAFETY: Call to `pin` is safe because we just allocated the data behind `raw` and the
+        // pointer can't be dangling before garbage collection.
+        let pin = unsafe { self.heap.alloc(data).pin() };
+        self.enroot(pin)
     }
 
     fn enroot<'pin, T: Trace + 'heap>(self: Pin<&'pin Self>, pin: Pin<&T>) -> Gc<'root, T> {
