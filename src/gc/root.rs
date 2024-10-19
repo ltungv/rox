@@ -74,6 +74,6 @@ impl<'root, 'heap> Root<'root, 'heap> {
 
     fn enroot<'pin, T: Trace + 'heap>(self: Pin<&'pin Self>, pin: Pin<&T>) -> Gc<'root, T> {
         self.heap.set_root(self.id, pin);
-        Gc::from(pin)
+        Gc::enroot(pin)
     }
 }

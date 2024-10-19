@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use std::cell::Cell;
+use std::{cell::Cell, ptr::NonNull};
 
 use crate::{list::List, opcode::Opcode, scan::Line};
 
@@ -139,6 +139,16 @@ unsafe impl<'heap> Trace for ClosureObject<'heap> {
     }
 }
 
+impl<'root, 'heap> Gc<'root, Alloc<'heap, ClosureObject<'heap>>> {
+    fn fun(self) -> Gc<'root, Alloc<'heap, FunctionObject<'heap>>> {
+        unsafe { self.project(|alloc| alloc.get_ref().as_ref().fun.pin()) }
+    }
+
+    fn upvalues(self) -> Gc<'root, Vec<GcUpvalue<'heap>>> {
+        unsafe { self.project(|alloc| alloc.map_unchecked(|alloc| &alloc.as_ref().upvalues)) }
+    }
+}
+
 // A type alias for a heap-allocated fun.
 pub type GcFunction<'heap> = Ptr<'heap, FunctionObject<'heap>>;
 
@@ -152,7 +162,6 @@ pub struct FunctionObject<'heap> {
     /// Number of upvalues captured by the function
     pub upvalue_count: usize,
     /// The bytecode chunk of this function
-    // TODO: Replace chunk with the one that uses the new object type.
     pub chunk: Chunk<'heap>,
 }
 
@@ -160,6 +169,16 @@ unsafe impl<'heap> Trace for FunctionObject<'heap> {
     fn trace(&self) {
         self.name.trace();
         self.chunk.trace();
+    }
+}
+
+impl<'root, 'heap> Gc<'root, Alloc<'heap, FunctionObject<'heap>>> {
+    fn name(self) -> Gc<'root, Option<GcString<'heap>>> {
+        unsafe { self.project(|alloc| alloc.map_unchecked(|alloc| &alloc.as_ref().name)) }
+    }
+
+    fn chunk(self) -> Gc<'root, Chunk<'heap>> {
+        unsafe { self.project(|alloc| alloc.map_unchecked(|alloc| &alloc.as_ref().chunk)) }
     }
 }
 
@@ -172,8 +191,7 @@ pub struct NativeFunctionObject<'heap> {
     /// Number of parameters
     pub arity: u8,
     /// Native function reference
-    // TODO: Replace Object with Value.
-    pub call: fn(&[Object<'heap>]) -> Object<'heap>,
+    pub call: fn(&[Value<'heap>]) -> Value<'heap>,
 }
 
 unsafe impl<'heap> Trace for NativeFunctionObject<'heap> {
@@ -193,9 +211,16 @@ pub struct ClassObject<'heap> {
 }
 
 unsafe impl<'heap> Trace for ClassObject<'heap> {
-    fn trace(&self) {}
+    fn trace(&self) {
+        self.name.trace();
+    }
 }
 
+impl<'root, 'heap> Gc<'root, Alloc<'heap, ClassObject<'heap>>> {
+    fn name(self) -> Gc<'root, Alloc<'heap, StringObject>> {
+        unsafe { self.project(|alloc| alloc.get_ref().as_ref().name.pin()) }
+    }
+}
 // A type alias for a heap-allocated class instance.
 pub type GcInstance<'heap> = Ptr<'heap, InstanceObject<'heap>>;
 
@@ -209,7 +234,15 @@ pub struct InstanceObject<'heap> {
 }
 
 unsafe impl<'heap> Trace for InstanceObject<'heap> {
-    fn trace(&self) {}
+    fn trace(&self) {
+        self.class.trace();
+    }
+}
+
+impl<'root, 'heap> Gc<'root, Alloc<'heap, InstanceObject<'heap>>> {
+    fn class(self) -> Gc<'root, Alloc<'heap, ClassObject<'heap>>> {
+        unsafe { self.project(|alloc| alloc.get_ref().as_ref().class.pin()) }
+    }
 }
 
 // A type alias for a heap-allocated bound method.
@@ -218,13 +251,25 @@ pub type GcMethod<'heap> = Ptr<'heap, MethodObject<'heap>>;
 /// The content of a heap-allocated bound method object.
 #[derive(Debug)]
 pub struct MethodObject<'heap> {
-    // TODO: Replace Object with Value.
-    pub receiver: Object<'heap>,
+    pub receiver: Value<'heap>,
     pub method: GcClosure<'heap>,
 }
 
 unsafe impl<'heap> Trace for MethodObject<'heap> {
-    fn trace(&self) {}
+    fn trace(&self) {
+        self.receiver.trace();
+        self.method.trace();
+    }
+}
+
+impl<'root, 'heap> Gc<'root, Alloc<'heap, MethodObject<'heap>>> {
+    fn receiver(self) -> Gc<'root, Value<'heap>> {
+        unsafe { self.project(|alloc| alloc.map_unchecked(|alloc| &alloc.as_ref().receiver)) }
+    }
+
+    fn method(self) -> Gc<'root, Alloc<'heap, ClosureObject<'heap>>> {
+        unsafe { self.project(|alloc| alloc.get_ref().as_ref().method.pin()) }
+    }
 }
 
 /// A chunk holds a sequence of instructions to be executes and their data.
@@ -297,148 +342,3 @@ impl<T> RunLength<T> {
         Self { data, length: 1 }
     }
 }
-
-// /// Go through the instructions in the chunk and display them in human-readable format.
-// #[cfg(feature = "dbg-execution")]
-// pub fn disassemble<'heap>(chunk: &Chunk<'heap>, name: &str) {
-//     println!("== {name} ==");
-//     let mut offset = 0;
-//     while offset < chunk.instructions.len() {
-//         offset = disassemble_instruction(chunk, offset);
-//     }
-// }
-//
-// /// Display an instruction in human readable format.
-// #[cfg(feature = "dbg-execution")]
-// pub fn disassemble_instruction<'heap>(chunk: &Chunk<'heap>, offset: usize) -> usize {
-//     use crate::vm::JumpDirection;
-//
-//     let line_current = chunk.get_line(offset);
-//     let line_previous = chunk.get_line(offset.saturating_sub(1));
-//     // Annotation for separating instructions from different lines.
-//     print!("{offset:04} ");
-//     if offset > 0 && line_current == line_previous {
-//         print!("   | ");
-//     } else {
-//         print!("{:4} ", *line_current);
-//     }
-//     let instruction = match Opcode::try_from(chunk.instructions[offset]) {
-//         Ok(inst) => inst,
-//         Err(err) => panic!("{}", err),
-//     };
-//     // Print each individual instruction.
-//     match instruction {
-//         Opcode::Const => disassemble_constant(chunk, offset, "OP_CONST"),
-//         Opcode::Nil => disassemble_simple(offset, "OP_NIL"),
-//         Opcode::True => disassemble_simple(offset, "OP_TRUE"),
-//         Opcode::False => disassemble_simple(offset, "OP_FALSE"),
-//         Opcode::Pop => disassemble_simple(offset, "OP_POP"),
-//         Opcode::GetLocal => disassemble_byte(chunk, offset, "OP_GET_LOCAL"),
-//         Opcode::SetLocal => disassemble_byte(chunk, offset, "OP_SET_LOCAL"),
-//         Opcode::GetGlobal => disassemble_constant(chunk, offset, "OP_GET_GLOBAL"),
-//         Opcode::SetGlobal => disassemble_constant(chunk, offset, "OP_SET_GLOBAL"),
-//         Opcode::DefineGlobal => disassemble_constant(chunk, offset, "OP_DEFINE_GLOBAL"),
-//         Opcode::GetUpvalue => disassemble_byte(chunk, offset, "OP_GET_UPVALUE"),
-//         Opcode::SetUpvalue => disassemble_byte(chunk, offset, "OP_SET_UPVALUE"),
-//         Opcode::GetProperty => disassemble_constant(chunk, offset, "OP_GET_PROPERTY"),
-//         Opcode::SetProperty => disassemble_constant(chunk, offset, "OP_SET_PROPERTY"),
-//         Opcode::GetSuper => disassemble_constant(chunk, offset, "OP_GET_SUPER"),
-//         Opcode::NE => disassemble_simple(offset, "OP_NE"),
-//         Opcode::EQ => disassemble_simple(offset, "OP_EQ"),
-//         Opcode::GT => disassemble_simple(offset, "OP_GT"),
-//         Opcode::GE => disassemble_simple(offset, "OP_GE"),
-//         Opcode::LT => disassemble_simple(offset, "OP_LT"),
-//         Opcode::LE => disassemble_simple(offset, "OP_LE"),
-//         Opcode::Add => disassemble_simple(offset, "OP_ADD"),
-//         Opcode::Sub => disassemble_simple(offset, "OP_SUB"),
-//         Opcode::Mul => disassemble_simple(offset, "OP_MUL"),
-//         Opcode::Div => disassemble_simple(offset, "OP_DIV"),
-//         Opcode::Not => disassemble_simple(offset, "OP_NOT"),
-//         Opcode::Neg => disassemble_simple(offset, "OP_NEG"),
-//         Opcode::Print => disassemble_simple(offset, "OP_PRINT"),
-//         Opcode::Jump => disassemble_jump(chunk, offset, JumpDirection::Forward, "OP_JUMP"),
-//         Opcode::JumpIfTrue => {
-//             disassemble_jump(chunk, offset, JumpDirection::Forward, "OP_JUMP_IF_TRUE")
-//         }
-//         Opcode::JumpIfFalse => {
-//             disassemble_jump(chunk, offset, JumpDirection::Forward, "OP_JUMP_IF_FALSE")
-//         }
-//         Opcode::Loop => disassemble_jump(chunk, offset, JumpDirection::Backward, "OP_LOOP"),
-//         Opcode::Call => disassemble_byte(chunk, offset, "OP_CALL"),
-//         Opcode::Invoke => disassemble_invoke(chunk, offset, "OP_INVOKE"),
-//         Opcode::SuperInvoke => disassemble_invoke(chunk, offset, "OP_SUPER_INVOKE"),
-//         Opcode::Closure => {
-//             let mut offset = offset + 1;
-//             let constant_id = chunk.instructions[offset] as usize;
-//             // SAFETY: The compiler must work correctly.
-//             let constant = unsafe { chunk.constants.get_unchecked(constant_id) };
-//             offset += 1;
-//             println!("{:-16} {constant_id:4} {constant}", "OP_CLOSURE");
-//             let fun = constant.as_fun().expect("expect function object.");
-//             let upvalue_count = fun.as_ref().upvalue_count;
-//             for _ in 0..upvalue_count {
-//                 let is_local = chunk.instructions[offset + 1] == 1;
-//                 let index = chunk.instructions[offset + 2];
-//                 let upvalue_type = if is_local { "local" } else { "upvalue" };
-//                 println!("{offset:04}    |                     {upvalue_type} {index}");
-//                 offset += 2;
-//             }
-//             offset
-//         }
-//         Opcode::CloseUpvalue => disassemble_simple(offset, "OP_CLOSE_UPVALUE"),
-//         Opcode::Ret => disassemble_simple(offset, "OP_RET"),
-//         Opcode::Class => disassemble_constant(chunk, offset, "OP_CLASS"),
-//         Opcode::Inherit => disassemble_simple(offset, "OP_INHERIT"),
-//         Opcode::Method => disassemble_constant(chunk, offset, "OP_METHOD"),
-//     }
-// }
-//
-// /// Display a simple instruction in human-readable format.
-// #[cfg(feature = "dbg-execution")]
-// fn disassemble_simple(offset: usize, name: &'static str) -> usize {
-//     println!("{name}");
-//     offset + 1
-// }
-//
-// /// Display a constant instruction in human-readable format.
-// #[cfg(feature = "dbg-execution")]
-// fn disassemble_constant(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
-//     let constant_id = chunk.instructions[offset + 1] as usize;
-//     // SAFETY: The compiler must work correctly.
-//     let constant = unsafe { chunk.constants.get_unchecked(constant_id) };
-//     println!("{name:-16} {constant_id:4} {constant}");
-//     offset + 2
-// }
-//
-// /// Display a byte instruction in human-readable format.
-// #[cfg(feature = "dbg-execution")]
-// fn disassemble_byte(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
-//     let slot = chunk.instructions[offset + 1] as usize;
-//     println!("{name:-16} {slot:4}");
-//     offset + 2
-// }
-//
-// /// Display a jump instruction in human-readable format.
-// #[cfg(feature = "dbg-execution")]
-// fn disassemble_jump(chunk: &Chunk, offset: usize, dir: JumpDirection, name: &'static str) -> usize {
-//     let hi = u16::from(chunk.instructions[offset + 1]);
-//     let lo = u16::from(chunk.instructions[offset + 2]);
-//     let jump = hi << 8 | lo;
-//     let target = match dir {
-//         JumpDirection::Forward => offset + 3 + jump as usize,
-//         JumpDirection::Backward => offset + 3 - jump as usize,
-//     };
-//     println!("{name:-16} {offset:4} -> {target}");
-//     offset + 3
-// }
-//
-// /// Display a invoke instruction in human-readable format.
-// #[cfg(feature = "dbg-execution")]
-// fn disassemble_invoke(chunk: &Chunk, offset: usize, name: &'static str) -> usize {
-//     let slot = chunk.instructions[offset + 1];
-//     let argc = chunk.instructions[offset + 2];
-//     // SAFETY: The compiler must work correctly.
-//     let file_name = unsafe { chunk.constants.get_unchecked(slot as usize) };
-//     println!("{name:-16} {slot:4} ({argc} args) {file_name}",);
-//     offset + 3
-// }

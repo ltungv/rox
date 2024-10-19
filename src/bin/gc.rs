@@ -1,7 +1,7 @@
 use rox::{
     enroot,
     gc::{
-        object::{Object, UpvalueObject},
+        object::{Object, RootedObject, UpvalueObject},
         Heap,
     },
 };
@@ -10,19 +10,19 @@ fn main() {
     let heap = std::pin::pin!(Heap::default());
     {
         enroot!(heap, root);
-        let upvalue1 = root.alloc(Object::Upvalue(heap.as_ref().alloc(UpvalueObject::Open(0))));
-
-        enroot!(heap, root);
         let upvalue = std::pin::pin!(Object::Upvalue(heap.as_ref().alloc(UpvalueObject::Open(0))));
-        let upvalue2 = root.enroot(upvalue.as_ref());
+        let rooted = RootedObject::from(root.enroot(upvalue.as_ref()));
+        let RootedObject::Upvalue(ref upvalue) = rooted else {
+            unreachable!()
+        };
 
-        println!("{:?}", *upvalue1);
-        println!("{:?}", *upvalue2);
+        println!("{:?}", rooted);
+        println!("{:?}", **upvalue);
 
         heap.as_ref().collect();
 
-        println!("{:?}", *upvalue1);
-        println!("{:?}", *upvalue2);
+        println!("{:?}", rooted);
+        println!("{:?}", **upvalue);
     }
     heap.as_ref().collect();
 }

@@ -75,15 +75,6 @@ pub struct Gc<'root, T: ?Sized> {
     ptr: NonNull<T>,
 }
 
-impl<'root, T: ?Sized> From<Pin<&T>> for Gc<'root, T> {
-    fn from(pin: Pin<&T>) -> Self {
-        Self {
-            _ref: PhantomData,
-            ptr: NonNull::from(pin.get_ref()),
-        }
-    }
-}
-
 impl<'root, T: ?Sized> std::ops::Deref for Gc<'root, T> {
     type Target = T;
 
@@ -100,14 +91,39 @@ unsafe impl<'root, T: ?Sized + Trace> Trace for Gc<'root, T> {
     }
 }
 
-impl<'heap, T: ?Sized> Gc<'heap, T> {
+impl<'root, T: ?Sized + Trace> Gc<'root, T> {
+    /// Creates a rooted pointer from a pinned reference.
+    #[must_use]
+    fn enroot(pin: Pin<&T>) -> Self {
+        Self {
+            _ref: PhantomData,
+            ptr: NonNull::from(pin.get_ref()),
+        }
+    }
+
+    /// Creates a rooted pointer from an interior value.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the data returned won't be garbage collected so long as the
+    /// argument argument value is not garbage collected.
+    unsafe fn project<U: ?Sized + Trace, P: FnOnce(Pin<&T>) -> Pin<&U>>(
+        &self,
+        project: P,
+    ) -> Gc<'root, U> {
+        let projected = project(self.pin());
+        Gc::enroot(projected)
+    }
+}
+
+impl<'root, T: ?Sized> Gc<'root, T> {
     /// Returns a shared pinned reference to the managed value.
     #[must_use]
-    pub fn pin(&self) -> Pin<&T> {
+    fn pin(&self) -> Pin<&'root T> {
         // SAFETY: By holding a `Gc`, the data behind its pointer is guaranteed to not be collected
         // and remains valid for as long as the `'root` lifetime.
         let data = unsafe { self.ptr.as_ref() };
-        // SAFETY: Once allocated, the pointee is never moved until it is collected.
+        // SAFETY: Data allocated on the managed heap won't ever be moved until it is collected.
         unsafe { Pin::new_unchecked(data) }
     }
 }
